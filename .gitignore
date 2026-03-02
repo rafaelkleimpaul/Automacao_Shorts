@@ -26,6 +26,11 @@ data/assets/fonts/*.otf
 !data/assets/**/.gitkeep
 !data/.gitkeep
 
+# ── OAuth tokens — NEVER commit these ─────────────────────────────────────────
+data/credentials/*.json
+data/credentials/*.key
+!data/credentials/.gitkeep
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

@@ -105,6 +105,26 @@ services:
       TTS_VOICE: ${TTS_VOICE:-en-US-Standard-D}
       TTS_SPEED: ${TTS_SPEED:-1.0}
 
+      # ── Auto-publishing platforms ─────────────────────────────
+      # All disabled by default. Enable one at a time after auth setup.
+
+      # YouTube
+      YOUTUBE_ENABLED:    ${YOUTUBE_ENABLED:-false}
+      YOUTUBE_PRIVACY:    ${YOUTUBE_PRIVACY:-public}        # public | unlisted | private
+      YOUTUBE_CATEGORY_ID: ${YOUTUBE_CATEGORY_ID:-27}       # 27=Education
+
+      # Instagram (requires PUBLIC_BASE_URL)
+      INSTAGRAM_ENABLED:      ${INSTAGRAM_ENABLED:-false}
+      INSTAGRAM_USER_ID:      ${INSTAGRAM_USER_ID:-}
+      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
+      PUBLIC_BASE_URL:        ${PUBLIC_BASE_URL:-}           # e.g. https://xxxx.ngrok-free.app
+
+      # TikTok
+      TIKTOK_ENABLED:       ${TIKTOK_ENABLED:-false}
+      TIKTOK_CLIENT_KEY:    ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_PRIVACY:       ${TIKTOK_PRIVACY:-PUBLIC_TO_EVERYONE}
+
       # Worker settings
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

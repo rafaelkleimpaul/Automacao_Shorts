@@ -2,10 +2,12 @@
 Shorts Video Worker – FastAPI entry point.
 
 Endpoints:
-  GET  /health              – liveness + DB probe
-  POST /run/{job_id}        – execute pipeline for a job (called by n8n)
-  GET  /job/{job_id}        – query job status + outputs
-  GET  /jobs                – list recent jobs (last 50)
+  GET  /health                    – liveness + DB probe
+  POST /run/{job_id}              – execute pipeline (called by n8n)
+  GET  /job/{job_id}              – job status + outputs + publish results
+  GET  /jobs                      – list recent jobs
+  GET  /serve/{job_id}/{filename} – serve a generated file (used by Instagram)
+  GET  /publish_results           – list recent publish results across all platforms
 """
 
 from __future__ import annotations
@@ -13,17 +15,20 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
 
 from utils.db import get_conn, get_job, init_pool, update_job_status
 from utils.logger import configure_logging
-from pipeline.orchestrator import run_pipeline
+from pipeline.orchestrator import run_pipeline, RUNNABLE_STATUSES
 
 configure_logging()
 logger = logging.getLogger(__name__)
+
+DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -34,14 +39,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Starting video worker…")
     init_pool(minconn=1, maxconn=5)
+    # Ensure credentials dir exists for OAuth token files
+    (DATA_ROOT / "credentials").mkdir(parents=True, exist_ok=True)
     yield
     logger.info("Shutting down video worker.")
 
 
 app = FastAPI(
     title="Shorts Video Worker",
-    version="1.0.0",
-    description="Local video generation pipeline for finance short-form content.",
+    version="2.0.0",
+    description=(
+        "Local video generation + auto-publishing pipeline "
+        "for short-form finance content (YouTube, Instagram, TikTok)."
+    ),
     lifespan=lifespan,
 )
 
@@ -51,10 +61,9 @@ app = FastAPI(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _run_pipeline_task(job_id: str) -> None:
-    """Runs synchronously in a thread pool (FastAPI BackgroundTasks)."""
     try:
         result = run_pipeline(job_id)
-        logger.info("Pipeline completed for job %s: %s", job_id, result)
+        logger.info("Pipeline completed for job %s → status=%s", job_id, result.get("status"))
     except Exception as exc:
         logger.error("Pipeline error for job %s: %s", job_id, exc, exc_info=True)
 
@@ -65,7 +74,7 @@ def _run_pipeline_task(job_id: str) -> None:
 
 @app.get("/health", tags=["ops"])
 def health() -> dict[str, Any]:
-    """Liveness + basic DB probe."""
+    """Liveness + basic DB probe + publishing platform status."""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -79,7 +88,12 @@ def health() -> dict[str, Any]:
         "status":    "ok" if db_ok else "degraded",
         "db":        "ok" if db_ok else "unreachable",
         "worker":    "ok",
-        "data_root": os.environ.get("DATA_ROOT", "/data"),
+        "data_root": str(DATA_ROOT),
+        "publishing": {
+            "youtube":   os.getenv("YOUTUBE_ENABLED", "false"),
+            "instagram": os.getenv("INSTAGRAM_ENABLED", "false"),
+            "tiktok":    os.getenv("TIKTOK_ENABLED", "false"),
+        },
     }
 
 
@@ -88,25 +102,29 @@ def run_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
     """
     Trigger pipeline execution for a job.
     Returns immediately with status=accepted; pipeline runs in background.
-    n8n should poll /job/{job_id} or rely on the DB status for completion.
     """
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    if job["status"] in ("READY_FOR_MANUAL_POST", "POSTED"):
+    current_status = job["status"]
+
+    # Allow re-running publishing if it previously failed
+    if current_status in ("PUBLISHED", "POSTED"):
         return {
             "status":  "already_done",
             "job_id":  job_id,
-            "message": f"Job already completed with status={job['status']}",
+            "message": f"Job already completed with status={current_status}",
         }
 
-    if job["status"] == "PROCESSING":
-        # Could be a retry – allow re-entry (orchestrator is idempotent)
-        logger.info("Job %s already PROCESSING – re-entering pipeline (idempotent)", job_id)
+    if current_status not in RUNNABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job status={current_status} is not runnable. "
+                   f"Reset to PENDING via SQL to retry.",
+        )
 
-    # Ensure status is PROCESSING before starting
-    if job["status"] == "PENDING":
+    if current_status == "PENDING":
         update_job_status(job_id, "PROCESSING")
 
     background_tasks.add_task(_run_pipeline_task, job_id)
@@ -120,10 +138,26 @@ def run_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
 
 @app.get("/job/{job_id}", tags=["pipeline"])
 def get_job_status(job_id: str) -> dict[str, Any]:
-    """Return current status and output paths for a job."""
+    """Return current status, output paths, and publish results for a job."""
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    # Fetch publish results
+    pub_results: list[dict] = []
+    try:
+        import psycopg2.extras
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT platform, status, platform_post_id, platform_url, "
+                    "error_message, published_at "
+                    "FROM publish_results WHERE job_id = %s ORDER BY created_at",
+                    (job_id,),
+                )
+                pub_results = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        pass   # table might not exist yet (before migration)
 
     return {
         "id":               str(job["id"]),
@@ -135,24 +169,93 @@ def get_job_status(job_id: str) -> dict[str, Any]:
         "final_video_path": job.get("final_video_path"),
         "post_pack_path":   job.get("post_pack_path"),
         "error_message":    job.get("error_message"),
-        "started_at":       str(job["started_at"]) if job.get("started_at") else None,
+        "started_at":       str(job["started_at"])   if job.get("started_at")   else None,
         "completed_at":     str(job["completed_at"]) if job.get("completed_at") else None,
         "retry_count":      job.get("retry_count", 0),
+        "publish_results":  pub_results,
     }
 
 
 @app.get("/jobs", tags=["pipeline"])
 def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
-    """List the most recent jobs."""
+    """List the most recent jobs with their publish status."""
+    import psycopg2.extras
     with get_conn() as conn:
-        import psycopg2.extras
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, status, main_subject, niche, language, priority,
-                       created_at, started_at, completed_at, retry_count
-                FROM   video_jobs
-                ORDER  BY created_at DESC
+                SELECT
+                    j.id, j.status, j.main_subject, j.niche, j.language,
+                    j.priority, j.created_at, j.started_at, j.completed_at,
+                    j.retry_count,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'platform',     r.platform,
+                            'status',       r.status,
+                            'platform_url', r.platform_url
+                        )
+                    ) FILTER (WHERE r.platform IS NOT NULL) AS publish_results
+                FROM   video_jobs j
+                LEFT   JOIN publish_results r ON r.job_id = j.id
+                GROUP  BY j.id
+                ORDER  BY j.created_at DESC
+                LIMIT  %s
+                """,
+                (min(limit, 200),),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+@app.get("/serve/{job_id}/{filename}", tags=["ops"])
+def serve_file(job_id: str, filename: str) -> FileResponse:
+    """
+    Serve a generated file for external access (required for Instagram uploads).
+    The PUBLIC_BASE_URL env var should point to the public URL of this worker.
+
+    Example: GET /serve/abc-123/final.mp4
+    """
+    # Security: only allow safe characters in filename
+    import re
+    if not re.match(r"^[\w\-. ]+$", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    output_dir = job.get("output_dir")
+    if not output_dir:
+        raise HTTPException(status_code=404, detail="Job output directory not set")
+
+    file_path = Path(output_dir) / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+
+    # Only serve files within the data directory (path traversal guard)
+    try:
+        file_path.resolve().relative_to(DATA_ROOT.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return FileResponse(str(file_path))
+
+
+@app.get("/publish_results", tags=["publishing"])
+def list_publish_results(limit: int = 50) -> list[dict[str, Any]]:
+    """List recent publishing results across all platforms and jobs."""
+    import psycopg2.extras
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    r.id, r.job_id, r.platform, r.status,
+                    r.platform_post_id, r.platform_url,
+                    r.error_message, r.published_at, r.created_at,
+                    j.main_subject
+                FROM   publish_results r
+                JOIN   video_jobs j ON j.id = r.job_id
+                ORDER  BY r.created_at DESC
                 LIMIT  %s
                 """,
                 (min(limit, 200),),

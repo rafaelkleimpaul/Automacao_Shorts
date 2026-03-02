@@ -1,6 +1,6 @@
 # Shorts Video Pipeline — Guia Completo de Instalação e Uso
 
-Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, PostgreSQL 16, FastAPI + FFmpeg e IA local (LLM, TTS, ASR).
+Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, PostgreSQL 16, FastAPI + FFmpeg e IA local (LLM, TTS, ASR). Suporta postagem automática no **YouTube**, **Instagram** e **TikTok**.
 
 ---
 
@@ -8,6 +8,7 @@ Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, P
 
 - [Visão geral da arquitetura](#visão-geral-da-arquitetura)
 - [PARTE 1 — Pré-requisitos](#parte-1--pré-requisitos)
+- **[PARTE 11 — Postagem automática (YouTube, Instagram, TikTok)](#parte-11--postagem-automática)**
 - [PARTE 2 — Serviços de IA local](#parte-2--serviços-de-ia-local)
 - [PARTE 3 — Configurar o projeto](#parte-3--configurar-o-projeto)
 - [PARTE 4 — Subir os containers](#parte-4--subir-os-containers)
@@ -993,4 +994,405 @@ docker compose up -d --build
 [ ] docker compose logs -f video_worker  ← vendo o progresso
 [ ] final.mp4 gerado em data/videos/YYYY-MM-DD/<uuid>/
 [ ] post_pack.txt revisado e pronto para postar
+```
+
+---
+
+## PARTE 11 — Postagem automática
+
+O pipeline inclui um step `PUBLISH` que roda automaticamente após gerar o vídeo e posta nas plataformas configuradas. **Todos estão desabilitados por padrão** — ative um de cada vez após concluir o setup de autenticação.
+
+### Visão geral do fluxo de publicação
+
+```
+RENDER → POST_PACK → PUBLISH
+                        │
+               ┌────────┼────────┐
+               ▼        ▼        ▼
+           YouTube  Instagram  TikTok
+               │        │        │
+               └────────┴────────┘
+                        │
+              job.status = PUBLISHED
+                   (ou PUBLISH_FAILED)
+```
+
+Novos status do job com publicação ativa:
+
+| Status | Significado |
+|--------|------------|
+| `PUBLISHING` | Publicando nas plataformas agora |
+| `PUBLISHED` | Publicado com sucesso (ao menos 1 plataforma) |
+| `PUBLISH_FAILED` | Todas as plataformas falharam |
+| `READY_FOR_MANUAL_POST` | Nenhuma plataforma habilitada (padrão) |
+
+### Verificar resultados de publicação
+
+```bash
+# Via API
+curl http://localhost:8000/job/<UUID>
+# → campo "publish_results" com status por plataforma
+
+curl http://localhost:8000/publish_results
+# → histórico completo de todas as postagens
+
+# Via SQL
+docker exec -it shorts_postgres psql -U shorts -d shorts_db \
+  -c "SELECT * FROM v_publish_summary ORDER BY completed_at DESC LIMIT 10;"
+```
+
+---
+
+### 11.1 YouTube
+
+#### Pré-requisitos
+
+1. Conta Google com canal no YouTube
+2. Projeto no [Google Cloud Console](https://console.cloud.google.com/) com YouTube Data API v3 ativada
+3. OAuth 2.0 Client ID do tipo **Desktop app**
+
+#### Setup passo a passo
+
+**Passo 1 — Criar o projeto e ativar a API:**
+
+1. Acesse https://console.cloud.google.com/
+2. Crie um novo projeto (ex: `shorts-pipeline`)
+3. **APIs & Services → Library** → busque `YouTube Data API v3` → **Enable**
+
+**Passo 2 — Criar as credenciais OAuth:**
+
+1. **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**
+2. Application type: **Desktop app**
+3. Name: `shorts-worker`
+4. Clique em **Download JSON**
+5. Renomeie o arquivo baixado para `youtube_client_secrets.json`
+6. Coloque em: `./data/credentials/youtube_client_secrets.json`
+
+**Passo 3 — Configurar a tela de consentimento OAuth:**
+
+1. **APIs & Services → OAuth consent screen**
+2. User Type: **External**
+3. Preencha nome do app e e-mail
+4. Scopes: adicione `https://www.googleapis.com/auth/youtube.upload`
+5. Test users: adicione seu e-mail do Google
+
+**Passo 4 — Instalar dependências e rodar o script de auth no host:**
+
+```bash
+# Na pasta raiz do projeto (no HOST, não no Docker)
+pip install google-auth-oauthlib google-api-python-client
+
+python scripts/auth_youtube.py
+# → Abre o browser → faça login → autorize → token salvo em data/credentials/youtube_token.json
+```
+
+**Passo 5 — Ativar no .env:**
+
+```env
+YOUTUBE_ENABLED=true
+YOUTUBE_PRIVACY=public          # public | unlisted | private
+YOUTUBE_CATEGORY_ID=27          # 27=Education
+```
+
+**Passo 6 — Reiniciar o worker:**
+
+```bash
+docker compose restart video_worker
+curl http://localhost:8000/health
+# → "youtube": "true"
+```
+
+#### Testar manualmente
+
+```bash
+# Inserir um job e executar
+docker exec -it shorts_postgres psql -U shorts -d shorts_db \
+  -c "INSERT INTO video_jobs (main_subject, priority) VALUES ('Test YouTube Post', 10) RETURNING id;"
+
+# Pegar o ID retornado e disparar
+curl -X POST http://localhost:8000/run/<UUID>
+
+# Acompanhar
+docker compose logs -f video_worker
+```
+
+#### Token expirado
+
+O token do YouTube é renovado automaticamente pelo worker. Se falhar, rode o script de auth novamente:
+
+```bash
+python scripts/auth_youtube.py
+docker compose restart video_worker
+```
+
+---
+
+### 11.2 Instagram (Reels)
+
+> **Requisito importante:** O Instagram exige que o vídeo esteja em uma URL **publicamente acessível** para processamento. Você precisa de um `PUBLIC_BASE_URL` — use ngrok ou Cloudflare Tunnel.
+
+#### Pré-requisitos
+
+1. Conta Instagram **Business ou Creator** conectada a uma **Facebook Page**
+2. App no [Meta Developers](https://developers.facebook.com/) com Instagram Graph API
+3. Permissões aprovadas: `instagram_basic`, `instagram_content_publish`, `pages_show_list`
+4. URL pública (ngrok, Cloudflare Tunnel, domínio próprio)
+
+#### Setup passo a passo
+
+**Passo 1 — Criar App no Meta:**
+
+1. Acesse https://developers.facebook.com/
+2. **My Apps → Create App → Consumer** (ou Business)
+3. Nome: `shorts-pipeline`
+4. **Add Product → Instagram Graph API**
+
+**Passo 2 — Obter o token de acesso:**
+
+1. Vá em **Tools → Graph API Explorer**
+2. Selecione seu App no menu superior
+3. Clique em **Generate Access Token**
+4. Marque as permissões: `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`
+5. Autorize e copie o token gerado (curto prazo, ~1h)
+
+**Passo 3 — Rodar o script de auth:**
+
+```bash
+pip install requests   # no HOST
+
+python scripts/auth_instagram.py
+# → Guia você pelo processo passo a passo
+# → No final exibe os valores para colocar no .env
+```
+
+O script retorna algo como:
+```
+INSTAGRAM_ENABLED=true
+INSTAGRAM_USER_ID=123456789012345
+INSTAGRAM_ACCESS_TOKEN=EAABxxxxxx...  (válido por 60 dias)
+```
+
+**Passo 4 — Configurar URL pública (ngrok — forma mais fácil):**
+
+```bash
+# Instalar ngrok: https://ngrok.com/download
+# Mac:
+brew install ngrok
+
+# Criar conta gratuita em ngrok.com e autenticar:
+ngrok config add-authtoken <seu-token>
+
+# Expor o worker (deixe rodando em um terminal separado):
+ngrok http 8000
+# → Copia a URL: https://abc123.ngrok-free.app
+```
+
+**Alternativa — Cloudflare Tunnel (mais estável, gratuito):**
+
+```bash
+# Instalar cloudflared:
+brew install cloudflared   # Mac
+
+# Criar túnel:
+cloudflared tunnel --url http://localhost:8000
+# → Copia a URL: https://xxx.trycloudflare.com
+```
+
+**Passo 5 — Adicionar ao .env:**
+
+```env
+INSTAGRAM_ENABLED=true
+INSTAGRAM_USER_ID=123456789012345
+INSTAGRAM_ACCESS_TOKEN=EAABxxxxxx...
+PUBLIC_BASE_URL=https://abc123.ngrok-free.app   # ← URL do ngrok/Cloudflare
+```
+
+**Passo 6 — Reiniciar o worker:**
+
+```bash
+docker compose restart video_worker
+```
+
+#### Renovar o token (a cada 60 dias)
+
+```bash
+python scripts/auth_instagram.py
+# → Atualiza INSTAGRAM_ACCESS_TOKEN no .env
+docker compose restart video_worker
+```
+
+#### Limitações do Instagram
+
+- O vídeo deve estar acessível por 10+ minutos durante o processamento
+- Manter o ngrok/Cloudflare Tunnel rodando durante a postagem
+- Specs do Reel: MP4, H.264+AAC, 9:16, 3–90s, máx 100MB ✅ (já compatível)
+- Conta deve ser Business ou Creator (não funciona com conta pessoal)
+
+---
+
+### 11.3 TikTok
+
+> O TikTok **aceita upload direto de arquivo** — não precisa de URL pública.
+
+#### Pré-requisitos
+
+1. Conta TikTok com conteúdo (quanto mais seguidores, maior chance de aprovação do app)
+2. App aprovado em [TikTok for Developers](https://developers.tiktok.com/) com **Content Posting API**
+3. Scopes aprovados: `video.publish`, `video.upload`, `user.info.basic`
+
+#### Setup passo a passo
+
+**Passo 1 — Criar App no TikTok for Developers:**
+
+1. Acesse https://developers.tiktok.com/
+2. **Manage Apps → Create app**
+3. Plataforma: **Web**
+4. Adicione o produto: **Content Posting API**
+5. Em **Login Kit**: adicione redirect URI: `http://localhost:8180/callback`
+6. Copie o **Client Key** e **Client Secret**
+
+> A aprovação do app pode levar alguns dias. Para testes, você pode usar o "Sandbox mode" disponível no painel do app.
+
+**Passo 2 — Rodar o script de auth:**
+
+```bash
+pip install requests   # no HOST
+
+TIKTOK_CLIENT_KEY=sua_key TIKTOK_CLIENT_SECRET=seu_secret python scripts/auth_tiktok.py
+# → Abre o browser para autorização TikTok
+# → Token salvo em: data/credentials/tiktok_token.json
+```
+
+**Passo 3 — Adicionar ao .env:**
+
+```env
+TIKTOK_ENABLED=true
+TIKTOK_CLIENT_KEY=sua_client_key
+TIKTOK_CLIENT_SECRET=seu_client_secret
+TIKTOK_PRIVACY=PUBLIC_TO_EVERYONE   # PUBLIC_TO_EVERYONE | FOLLOWER_OF_CREATOR | SELF_ONLY
+```
+
+**Passo 4 — Reiniciar o worker:**
+
+```bash
+docker compose restart video_worker
+```
+
+#### Token refresh automático
+
+O refresh token do TikTok é válido por ~365 dias. O worker renova o access token automaticamente. Se o refresh token também expirar, rode o script de auth novamente.
+
+#### Specs do TikTok
+
+- MP4, H.264+AAC ✅
+- Duração: 3s–10min ✅ (nós geramos 20–45s)
+- Máx: 4GB ✅
+- Aspectos aceitos: 9:16 ✅, também 1:1, 16:9
+- Título: máx 150 chars
+
+---
+
+### 11.4 Habilitar múltiplas plataformas simultaneamente
+
+Você pode habilitar qualquer combinação. O pipeline tenta publicar em todas as plataformas ativas. Se uma falhar, as outras ainda são publicadas.
+
+```env
+# Exemplo: habilitar YouTube e TikTok, mas não Instagram
+YOUTUBE_ENABLED=true
+INSTAGRAM_ENABLED=false
+TIKTOK_ENABLED=true
+```
+
+Resultado no banco após publicação:
+
+```sql
+SELECT platform, status, platform_url, published_at
+FROM publish_results
+WHERE job_id = '<uuid>';
+
+-- Exemplo:
+-- youtube  | SUCCESS | https://youtube.com/watch?v=xxxx | 2025-01-15 10:30:00
+-- instagram| SKIPPED | NULL                              | NULL
+-- tiktok   | SUCCESS | https://www.tiktok.com/          | 2025-01-15 10:31:00
+```
+
+---
+
+### 11.5 Checklist de publicação automática
+
+```
+[ ] SQL 03_publishing.sql executado no banco
+    docker exec -i shorts_postgres psql -U shorts -d shorts_db < sql/03_publishing.sql
+
+YouTube:
+[ ] YouTube Data API v3 ativada no Google Cloud
+[ ] OAuth 2.0 Client ID (Desktop app) criado
+[ ] youtube_client_secrets.json em ./data/credentials/
+[ ] python scripts/auth_youtube.py → token salvo
+[ ] YOUTUBE_ENABLED=true no .env
+[ ] docker compose restart video_worker
+
+Instagram:
+[ ] App Meta criado com permissões aprovadas
+[ ] python scripts/auth_instagram.py → token + user_id obtidos
+[ ] ngrok ou Cloudflare Tunnel rodando (ngrok http 8000)
+[ ] PUBLIC_BASE_URL configurado no .env
+[ ] INSTAGRAM_ENABLED=true, USER_ID e TOKEN no .env
+[ ] docker compose restart video_worker
+
+TikTok:
+[ ] App TikTok for Developers criado com Content Posting API aprovado
+[ ] redirect_uri http://localhost:8180/callback registrado no app
+[ ] python scripts/auth_tiktok.py → token salvo
+[ ] TIKTOK_ENABLED=true, CLIENT_KEY e CLIENT_SECRET no .env
+[ ] docker compose restart video_worker
+
+Geral:
+[ ] curl http://localhost:8000/health → plataformas habilitadas visíveis
+[ ] Inserir job de teste e executar
+[ ] curl http://localhost:8000/publish_results → ver resultado
+```
+
+---
+
+### 11.6 Solução de problemas de publicação
+
+**Job travado em `PUBLISHING` por muito tempo:**
+
+```bash
+docker compose logs -f video_worker | grep -i "instagram\|youtube\|tiktok"
+```
+
+**Re-tentar publicação após falha (sem re-gerar o vídeo):**
+
+```sql
+-- O job deve estar em PUBLISH_FAILED ou PUBLISHED
+-- Deletar apenas o step PUBLISH para re-executar só a publicação
+DELETE FROM job_steps WHERE job_id='<UUID>' AND step_name='PUBLISH';
+UPDATE video_jobs SET status='READY_FOR_MANUAL_POST' WHERE id='<UUID>';
+
+-- Disparar via API:
+-- curl -X POST http://localhost:8000/run/<UUID>
+```
+
+**Instagram — erro "Video URL not accessible":**
+
+Verifique se o ngrok/tunnel está ativo e se o `PUBLIC_BASE_URL` no .env está correto:
+
+```bash
+# Testar se o worker serve o arquivo corretamente
+curl "https://seu-ngrok.ngrok-free.app/serve/<JOB_UUID>/final.mp4" -I
+# → deve retornar HTTP 200
+```
+
+**YouTube — "Token expired":**
+
+```bash
+python scripts/auth_youtube.py    # renova automaticamente
+docker compose restart video_worker
+```
+
+**TikTok — "Scope not authorized":**
+
+No painel do TikTok for Developers, verifique se os scopes `video.publish` e `video.upload` estão aprovados. Em sandbox mode, alguns scopes têm restrições.
 ```
