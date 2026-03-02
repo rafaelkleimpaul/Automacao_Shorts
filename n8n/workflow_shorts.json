@@ -1,0 +1,344 @@
+{
+  "name": "Shorts Video Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "Runs every 5 minutes. Adjust interval as needed."
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE video_jobs SET status='PROCESSING', locked_by='n8n-{{ $now.toISO() }}', locked_at=NOW(), started_at=NOW() WHERE id=(SELECT id FROM video_jobs WHERE status='PENDING' AND (scheduled_at IS NULL OR scheduled_at <= NOW()) AND retry_count < max_retries ORDER BY priority DESC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, main_subject, niche, language, style, duration_target_seconds, assets_profile, extra_params, priority, retry_count;",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Postgres – Claim Job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "PostgreSQL Shorts"
+        }
+      },
+      "notes": "Atomically claims next PENDING job. Returns 0 rows if no job available."
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-001",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true
+      },
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "IF – Job Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "True output: job found → call worker. False output: no job → stop."
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.WORKER_URL }}/run/{{ $json.id }}",
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "HTTP – Call Worker",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 220],
+      "notes": "POST /run/{job_id} to the FastAPI worker. Returns immediately with status=accepted."
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-002",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "accepted",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true
+      },
+      "id": "a1b2c3d4-0005-0005-0005-000000000005",
+      "name": "IF – Worker Accepted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 220],
+      "notes": "Check if worker returned status=accepted. On True: log success. On False: log error."
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO job_logs (job_id, step_name, level, message, details) VALUES ('{{ $('Postgres – Claim Job').item.json.id }}', 'N8N_DISPATCH', 'INFO', 'Job dispatched to worker successfully', '{\"worker_response\": {{ JSON.stringify($json) }}}');",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-0006-0006-000000000006",
+      "name": "Postgres – Log Dispatched",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 160],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "PostgreSQL Shorts"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE video_jobs SET status='FAILED', error_message='Worker dispatch failed: HTTP {{ $json.statusCode }} – {{ $json.body }}', failed_at=NOW(), retry_count=retry_count+1 WHERE id='{{ $('Postgres – Claim Job').item.json.id }}' RETURNING id, status, retry_count, max_retries;",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0007-0007-0007-000000000007",
+      "name": "Postgres – Mark Dispatch Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 300],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "PostgreSQL Shorts"
+        }
+      }
+    },
+
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-0008-0008-0008-000000000008",
+      "name": "No Op – No Job",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [900, 400],
+      "notes": "No pending jobs found. Pipeline stops here until next cron trigger."
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT move_to_dead_letter('{{ $('Postgres – Claim Job').item.json.id }}'::uuid, 'Max retries exceeded after worker dispatch failure') WHERE (SELECT retry_count >= max_retries FROM video_jobs WHERE id='{{ $('Postgres – Claim Job').item.json.id }}');",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0009-0009-0009-000000000009",
+      "name": "Postgres – Dead Letter Check",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 300],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "PostgreSQL Shorts"
+        }
+      },
+      "notes": "Moves job to dead_letters if retry_count >= max_retries."
+    },
+
+    {
+      "parameters": {
+        "errorMessage": "={{ 'Job ' + $('Postgres – Claim Job').item.json.id + ' failed: ' + $json.error?.message }}"
+      },
+      "id": "a1b2c3d4-0010-0010-0010-000000000010",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 520],
+      "notes": "Catches any unhandled execution errors in this workflow."
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO job_logs (job_id, step_name, level, message, details) VALUES ('{{ $json.execution?.lastNodeExecuted }}', 'N8N_ERROR', 'ERROR', 'Unhandled workflow error', '{{ JSON.stringify({error: $json.error?.message, node: $json.execution?.lastNodeExecuted}) }}') ON CONFLICT DO NOTHING;",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0011-0011-0011-000000000011",
+      "name": "Postgres – Log Workflow Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 520],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "PostgreSQL Shorts"
+        }
+      }
+    }
+  ],
+
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Postgres – Claim Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres – Claim Job": {
+      "main": [
+        [
+          {
+            "node": "IF – Job Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF – Job Found?": {
+      "main": [
+        [
+          {
+            "node": "HTTP – Call Worker",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Op – No Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP – Call Worker": {
+      "main": [
+        [
+          {
+            "node": "IF – Worker Accepted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF – Worker Accepted?": {
+      "main": [
+        [
+          {
+            "node": "Postgres – Log Dispatched",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Postgres – Mark Dispatch Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres – Mark Dispatch Failed": {
+      "main": [
+        [
+          {
+            "node": "Postgres – Dead Letter Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Postgres – Log Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "id": "shorts-video-pipeline-v1",
+  "tags": ["finance", "shorts", "video", "automation"]
+}

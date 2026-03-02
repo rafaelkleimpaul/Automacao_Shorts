@@ -1,0 +1,128 @@
+version: "3.9"
+
+services:
+
+  # ─────────────────────────────────────────────
+  # PostgreSQL 16
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: shorts_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shorts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shorts_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-shorts_db}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro       # auto-run on first start
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shorts} -d ${POSTGRES_DB:-shorts_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shorts_net
+
+  # ─────────────────────────────────────────────
+  # n8n 2.9.4
+  # ─────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:2.9.4
+    container_name: shorts_n8n
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # n8n database (uses postgres for its own metadata)
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-shorts_db}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-shorts}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-shorts_secret}
+      DB_POSTGRESDB_SCHEMA: n8n_meta
+
+      # n8n general
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change_me_32_chars_minimum_key!}
+      GENERIC_TIMEZONE: ${TIMEZONE:-America/New_York}
+
+      # Execution
+      EXECUTIONS_PROCESS: main
+      N8N_METRICS: true
+
+      # Data root shared with worker
+      DATA_ROOT: /data
+
+      # Plugin env vars (available in n8n expressions)
+      WORKER_URL: http://video_worker:8000
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+      - ./data:/data
+    ports:
+      - "5678:5678"
+    networks:
+      - shorts_net
+
+  # ─────────────────────────────────────────────
+  # Video Worker (FastAPI + FFmpeg + Python)
+  # ─────────────────────────────────────────────
+  video_worker:
+    build:
+      context: ./python_service
+      dockerfile: Dockerfile
+    container_name: shorts_worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-shorts}:${POSTGRES_PASSWORD:-shorts_secret}@postgres:5432/${POSTGRES_DB:-shorts_db}
+      DATA_ROOT: /data
+      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-en_US}
+      DEFAULT_NICHE: ${DEFAULT_NICHE:-finance}
+      DEFAULT_STYLE: ${DEFAULT_STYLE:-commentary}
+      DEFAULT_DURATION: ${DEFAULT_DURATION:-30}
+
+      # ── Pluggable service endpoints ──────────
+      # Replace with real service URLs when available.
+      # A stub/mock server is used if these point to a local service.
+      LLM_ENDPOINT: ${LLM_ENDPOINT:-http://host.docker.internal:11434/api/generate}
+      TTS_ENDPOINT: ${TTS_ENDPOINT:-http://host.docker.internal:5500/synthesize}
+      ASR_ENDPOINT: ${ASR_ENDPOINT:-http://host.docker.internal:9000/transcribe}
+
+      # LLM model name (e.g., llama3, mistral, phi3)
+      LLM_MODEL: ${LLM_MODEL:-llama3}
+
+      # TTS voice selection
+      TTS_VOICE: ${TTS_VOICE:-en-US-Standard-D}
+      TTS_SPEED: ${TTS_SPEED:-1.0}
+
+      # Worker settings
+      PYTHONUNBUFFERED: 1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_RETRIES: ${MAX_RETRIES:-3}
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # reach host services (Ollama etc.)
+    networks:
+      - shorts_net
+
+networks:
+  shorts_net:
+    driver: bridge
+
+volumes:
+  # Declared here for clarity; actual dirs are bind mounts above.
+  shorts_data:
+    driver: local

@@ -1,0 +1,45 @@
+# ── Env secrets ───────────────────────────────────────────────────────────────
+.env
+
+# ── Generated videos (can be large) ──────────────────────────────────────────
+data/videos/
+
+# ── Docker volumes ────────────────────────────────────────────────────────────
+data/postgres/
+data/n8n/
+
+# ── User-provided large assets (add to repo manually if desired) ──────────────
+data/assets/broll/**/*.mp4
+data/assets/broll/**/*.mov
+data/assets/broll/**/*.avi
+data/assets/broll/**/*.jpg
+data/assets/broll/**/*.jpeg
+data/assets/broll/**/*.png
+data/assets/broll/**/*.webp
+data/assets/music/*.mp3
+data/assets/music/*.wav
+data/assets/music/*.ogg
+data/assets/fonts/*.ttf
+data/assets/fonts/*.otf
+
+# Keep placeholder files
+!data/assets/**/.gitkeep
+!data/.gitkeep
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.log
+.DS_Store
+*.swp
+*.swo
