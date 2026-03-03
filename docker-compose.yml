@@ -17,7 +17,7 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro       # auto-run on first start
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shorts} -d ${POSTGRES_DB:-shorts_db}"]
       interval: 10s
@@ -47,12 +47,17 @@ services:
       DB_POSTGRESDB_SCHEMA: n8n_meta
 
       # n8n general
-      N8N_HOST: 0.0.0.0
-      N8N_PORT: 5678
-      N8N_PROTOCOL: http
-      WEBHOOK_URL: http://localhost:5678/
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change_me_32_chars_minimum_key!}
+      N8N_HOST: ${N8N_HOST:-n8n.rafaelkleimpaul.com.br}
+      N8N_PORT: ${N8N_PORT:-5678}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${WEBHOOK_URL:-https://n8n.rafaelkleimpaul.com.br/}
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-https://n8n.rafaelkleimpaul.com.br/}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-2389283428934289342893428934289342893428934289342893428934289342}
       GENERIC_TIMEZONE: ${TIMEZONE:-America/New_York}
+      N8N_BLOCK_ENV_ACCESS: ${N8N_BLOCK_ENV_ACCESS:-false}
+      NODE_ENV: ${NODE_ENV:-production} # production | development | test
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: ${N8N_BLOCK_ENV_ACCESS_IN_NODE:-false}
+
 
       # Execution
       EXECUTIONS_PROCESS: main
@@ -95,14 +100,14 @@ services:
       # Replace with real service URLs when available.
       # A stub/mock server is used if these point to a local service.
       LLM_ENDPOINT: ${LLM_ENDPOINT:-http://host.docker.internal:11434/api/generate}
-      TTS_ENDPOINT: ${TTS_ENDPOINT:-http://host.docker.internal:5500/synthesize}
+      TTS_ENDPOINT: ${TTS_ENDPOINT:-http://host.docker.internal:8880/v1/audio/speech}
       ASR_ENDPOINT: ${ASR_ENDPOINT:-http://host.docker.internal:9000/transcribe}
 
       # LLM model name (e.g., llama3, mistral, phi3)
       LLM_MODEL: ${LLM_MODEL:-llama3}
 
       # TTS voice selection
-      TTS_VOICE: ${TTS_VOICE:-en-US-Standard-D}
+      TTS_VOICE: ${TTS_VOICE:-af_heart}
       TTS_SPEED: ${TTS_SPEED:-1.0}
 
       # ── Auto-publishing platforms ─────────────────────────────

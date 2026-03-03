@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 W, H, FPS = 1080, 1920, 30
 MUSIC_VOLUME = 0.08          # 8 % — barely audible under voice
 VOICE_VOLUME = 1.0
-FONT_NAME    = "DejaVu-Sans-Bold"   # available in Debian; change if using custom font
-FONT_SIZE    = 52
+FONT_NAME    = "DejaVu-Sans"        # available in Debian; change if using custom font
+FONT_SIZE    = 34
 FONT_COLOR   = "white"
-OUTLINE_SIZE = 3
+OUTLINE_SIZE = 2
 VIDEO_EXTS   = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 IMAGE_EXTS   = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -203,7 +203,7 @@ def _burn_subtitles(
     # Escape srt path for FFmpeg subtitles filter
     srt_str = str(srt_path).replace(":", "\\:").replace("'", "\\'")
 
-    # Custom font if available
+    # Movie-style subtitles: white text, thin outline, soft shadow, no background box
     font_file = FONTS_DIR / "Arial.ttf"
     if font_file.exists():
         force_style = (
@@ -211,12 +211,12 @@ def _burn_subtitles(
             f"FontSize={FONT_SIZE},"
             f"PrimaryColour=&H00FFFFFF&,"
             f"OutlineColour=&H00000000&,"
-            f"BackColour=&H80000000&,"
+            f"BorderStyle=1,"
             f"Outline={OUTLINE_SIZE},"
-            f"Shadow=0,"
-            f"Bold=1,"
+            f"Shadow=1,"
+            f"Bold=0,"
             f"Alignment=2,"
-            f"MarginV=80"
+            f"MarginV=100"
         )
     else:
         force_style = (
@@ -224,12 +224,12 @@ def _burn_subtitles(
             f"FontSize={FONT_SIZE},"
             f"PrimaryColour=&H00FFFFFF&,"
             f"OutlineColour=&H00000000&,"
-            f"BackColour=&H80000000&,"
+            f"BorderStyle=1,"
             f"Outline={OUTLINE_SIZE},"
-            f"Shadow=0,"
-            f"Bold=1,"
+            f"Shadow=1,"
+            f"Bold=0,"
             f"Alignment=2,"
-            f"MarginV=80"
+            f"MarginV=100"
         )
 
     subtitle_filter = f"subtitles='{srt_str}':force_style='{force_style}'"

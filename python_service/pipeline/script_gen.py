@@ -42,6 +42,8 @@ def build_prompt(
     tone = extra_params.get("tone", "friendly")
     complexity = extra_params.get("complexity", "beginner")
 
+    scene_duration = max(5, duration_target // 3)
+
     return f"""You are a professional short-video scriptwriter specializing in {niche} content.
 
 Write a complete script for a {duration_target}-second vertical short video (9:16 format) about:
@@ -55,7 +57,9 @@ REQUIREMENTS:
 - Total estimated speaking duration: {duration_target} seconds (~{duration_target * 2.5:.0f} words)
 - IMPORTANT: This is EDUCATIONAL content only. Never give personalized financial advice.
 
-OUTPUT FORMAT — respond ONLY with a valid JSON object (no markdown, no explanation):
+OUTPUT FORMAT — respond ONLY with a valid JSON object (no markdown, no explanation).
+The "scenes" array MUST contain EXACTLY 3 items (three separate scene objects):
+
 {{
   "title": "<short catchy title, max 60 chars>",
   "hook": "<attention-grabbing opening line, 1-2 sentences>",
@@ -63,28 +67,40 @@ OUTPUT FORMAT — respond ONLY with a valid JSON object (no markdown, no explana
   "scenes": [
     {{
       "index": 1,
-      "description": "<visual description for b-roll selection>",
-      "duration_s": <seconds for this scene>,
-      "keywords": ["<keyword1>", "<keyword2>"]
+      "description": "<opening visual: person, money, chart, or concept related to topic>",
+      "duration_s": {scene_duration},
+      "keywords": ["money", "finance"]
+    }},
+    {{
+      "index": 2,
+      "description": "<middle visual: explanation, diagram, or example of the topic>",
+      "duration_s": {scene_duration},
+      "keywords": ["chart", "investing"]
+    }},
+    {{
+      "index": 3,
+      "description": "<closing visual: positive outcome, call to action, or summary>",
+      "duration_s": {scene_duration},
+      "keywords": ["success", "growth"]
     }}
   ],
   "on_screen_captions": [
     "<short phrase 1 (max 6 words)>",
-    "<short phrase 2>",
-    "<short phrase 3>"
+    "<short phrase 2 (max 6 words)>",
+    "<short phrase 3 (max 6 words)>"
   ],
-  "hashtags": ["#PersonalFinance", "#MoneyTips", "#Finance101"],
-  "keywords": ["<keyword for asset selection>", "<keyword2>"],
+  "hashtags": ["#PersonalFinance", "#MoneyTips", "#Finance101", "#Investing", "#FinancialLiteracy"],
+  "keywords": ["money", "finance", "investing", "charts"],
   "disclaimer": "This video is for educational purposes only and does not constitute financial advice. Always consult a qualified financial professional."
 }}
 
-RULES:
+STRICT RULES — follow exactly:
+- "scenes" must be a JSON array with AT LEAST 3 objects inside square brackets [ ]
 - voiceover must be approx {duration_target * 2.5:.0f} words (±25%)
-- 3 to 6 scenes, each 5–12 seconds
-- 10–20 hashtags relevant to {niche}
+- 5 to 20 hashtags relevant to {niche}
 - keywords should map to generic stock visuals (e.g., "money", "charts", "coins", "hands counting money")
-- disclaimer must say "educational" and disclaim financial advice
-- Do NOT include markdown, code blocks, or any text outside the JSON
+- disclaimer must contain the word "educational"
+- respond with ONLY the JSON object — no markdown, no code blocks, no extra text
 """
 
 
