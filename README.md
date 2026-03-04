@@ -17,9 +17,10 @@ Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, P
 - [PARTE 8 — Criar e executar o primeiro job](#parte-8--criar-e-executar-o-primeiro-job)
 - [PARTE 9 — Ver os resultados](#parte-9--ver-os-resultados)
 - [PARTE 10 — Operação diária](#parte-10--operação-diária)
+- [PARTE 11 — Postagem automática (YouTube, Instagram, TikTok)](#parte-11--postagem-automática)
 - [Referência rápida de comandos](#referência-rápida-de-comandos)
 - [Solução de problemas](#solução-de-problemas)
-- - **[PARTE 11 — Postagem automática (YouTube, Instagram, TikTok)](#parte-11--postagem-automática)**
+
 
 ---
 
