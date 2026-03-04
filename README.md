@@ -8,7 +8,6 @@ Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, P
 
 - [Visão geral da arquitetura](#visão-geral-da-arquitetura)
 - [PARTE 1 — Pré-requisitos](#parte-1--pré-requisitos)
-- **[PARTE 11 — Postagem automática (YouTube, Instagram, TikTok)](#parte-11--postagem-automática)**
 - [PARTE 2 — Serviços de IA local](#parte-2--serviços-de-ia-local)
 - [PARTE 3 — Configurar o projeto](#parte-3--configurar-o-projeto)
 - [PARTE 4 — Subir os containers](#parte-4--subir-os-containers)
@@ -20,6 +19,7 @@ Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, P
 - [PARTE 10 — Operação diária](#parte-10--operação-diária)
 - [Referência rápida de comandos](#referência-rápida-de-comandos)
 - [Solução de problemas](#solução-de-problemas)
+- - **[PARTE 11 — Postagem automática (YouTube, Instagram, TikTok)](#parte-11--postagem-automática)**
 
 ---
 
