@@ -40,7 +40,7 @@ def build_prompt(
     extra_params: dict[str, Any],
 ) -> str:
     tone = extra_params.get("tone", "friendly")
-    complexity = extra_params.get("complexity", "beginner")
+    complexity = extra_params.get("complexity", "intermediate")
 
     scene_duration = max(5, duration_target // 3)
 

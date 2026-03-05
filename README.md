@@ -14,6 +14,7 @@ Pipeline 100% local para gerar vídeos curtos 9:16 de finanças com n8n 2.9.4, P
 - [PARTE 4 — Subir os containers](#parte-4--subir-os-containers)
 - [PARTE 5 — Banco de dados](#parte-5--banco-de-dados)
 - [PARTE 6 — Assets de vídeo e música](#parte-6--assets-de-vídeo-e-música)
+- [PARTE 6.1 — Renomear assets com IA](#parte-61--renomear-assets-com-ia)
 - [PARTE 7 — Configurar o n8n](#parte-7--configurar-o-n8n)
 - [PARTE 8 — Criar e executar o primeiro job](#parte-8--criar-e-executar-o-primeiro-job)
 - [PARTE 9 — Ver os resultados](#parte-9--ver-os-resultados)
@@ -455,6 +456,90 @@ ls data/assets/music/
 ```
 
 > **Mínimo para funcionar:** pelo menos 3 imagens `.jpg` em `data/assets/broll/finance/`. Sem nenhum asset, o FFmpeg gera fundo preto (o vídeo ainda é criado).
+
+---
+
+## PARTE 6.1 — Renomear assets com IA
+
+O script `python_service/utils/rename_video.py` usa um modelo de visão (Ollama `llava` ou qualquer endpoint OpenAI-compatible) para analisar os frames de cada vídeo/imagem e gerar um nome descritivo automaticamente — facilitando muito a escolha do asset certo na hora de montar o short.
+
+### Por que isso importa
+
+O sistema de seleção de assets em `assets.py` faz **keyword matching pelo nome do arquivo**. Quanto mais descritivo o nome, melhor o b-roll escolhido para cada cena.
+
+```
+❌ Antes:  IMG_4523.mp4, clip001.mp4, An icon spot.MP4
+✅ Depois: finance_coins_close_up_hands.mp4, stock_chart_growing_screen.mp4
+```
+
+### Pré-requisito: modelo de visão no Ollama
+
+```bash
+ollama pull llava          # recomendado (~4.7 GB)
+# ou mais leve:
+ollama pull moondream      # ~1.7 GB, menos preciso
+```
+
+### Uso básico
+
+```bash
+# Navegue até o script
+cd python_service/utils/
+
+# 1. DRY-RUN — preview sem renomear nada:
+python3 rename_video.py ../../data/assets/broll/finance
+
+# 2. Aplicar a renomeação:
+python3 rename_video.py ../../data/assets/broll/finance --apply
+
+# 3. Aplicar com prefixo de tema (recomendado):
+python3 rename_video.py ../../data/assets/broll/finance --theme finance --apply
+
+# 4. Processar toda a pasta broll de uma vez:
+python3 rename_video.py ../../data/assets/broll --theme finance --apply
+```
+
+### Variáveis de ambiente
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `VISION_ENDPOINT` | `http://localhost:11434/api/generate` | Ollama ou endpoint OpenAI-compat |
+| `VISION_MODEL` | `llava` | Modelo de visão a usar |
+| `LLM_TIMEOUT` | `60` | Timeout em segundos por arquivo |
+
+### Usar com modelo diferente
+
+```bash
+# Outro modelo Ollama:
+VISION_MODEL=moondream python3 rename_video.py ../../data/assets/broll --apply
+
+# OpenAI gpt-4o-mini:
+VISION_ENDPOINT=https://api.openai.com/v1/chat/completions \
+VISION_MODEL=gpt-4o-mini \
+python3 rename_video.py ../../data/assets/broll --apply
+
+# LM Studio local (OpenAI-compat):
+VISION_ENDPOINT=http://localhost:1234/v1/chat/completions \
+VISION_MODEL=llava-v1.6 \
+python3 rename_video.py ../../data/assets/broll --apply
+```
+
+### Opções do CLI
+
+| Flag | Descrição |
+|------|-----------|
+| `--apply` | Executa a renomeação (padrão: dry-run) |
+| `--theme <nome>` | Prefixo adicionado a todos os slugs (ex: `finance`) |
+| `--no-skip` | Re-analisa arquivos que já têm nome descritivo |
+| `--frames N` | Número de frames extraídos por vídeo (padrão: 3) |
+
+### Log de renomeações
+
+Após rodar, o script salva um CSV em `data/assets/broll/<pasta>/rename_map.csv` com o mapeamento completo de nomes antigos → novos, útil para rastrear ou desfazer.
+
+### Fallback sem IA
+
+Se o modelo de visão não estiver disponível ou retornar erro, o script faz fallback automático gerando o nome a partir do **nome das pastas + nome original do arquivo** — sem travar o processo.
 
 ---
 
