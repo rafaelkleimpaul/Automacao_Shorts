@@ -77,6 +77,18 @@ services:
       - shorts_net
 
   # ─────────────────────────────────────────────
+  # Kokoro TTS (OpenAI-compatible /v1/audio/speech)
+  # ─────────────────────────────────────────────
+  tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.1
+    container_name: shorts_tts
+    restart: unless-stopped
+    ports:
+      - "8880:8880"
+    networks:
+      - shorts_net
+
+  # ─────────────────────────────────────────────
   # Video Worker (FastAPI + FFmpeg + Python)
   # ─────────────────────────────────────────────
   video_worker:
@@ -88,6 +100,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      tts:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-shorts}:${POSTGRES_PASSWORD:-shorts_secret}@postgres:5432/${POSTGRES_DB:-shorts_db}
       DATA_ROOT: /data

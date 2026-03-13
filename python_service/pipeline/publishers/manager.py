@@ -34,7 +34,7 @@ def publish_all(
     final_video_path: Path,
     title: str,
     caption: str,
-    hashtags: list[str],
+    hashtags: "list[str] | dict[str, list[str]]",
 ) -> list[dict[str, Any]]:
     """
     Publish to all enabled platforms.
@@ -54,26 +54,41 @@ def publish_all(
         from pipeline.publishers.tiktok import TikTokPublisher
         platforms.append(TikTokPublisher())
 
+    from utils.db import log_publish as _log_publish
+    job_id = str(job.get("id", ""))
+
+    # Support both flat list and per-platform dict (from hashtag_booster)
+    def _hashtags_for(platform_name: str) -> list:
+        if isinstance(hashtags, dict):
+            return hashtags.get(platform_name, hashtags.get("default", []))
+        return hashtags  # type: ignore[return-value]
+
     for publisher in platforms:
         name = publisher.platform_name
-        logger.info("Publishing to %s…", name)
+        logger.info("[%s] Starting upload…", name.upper())
+        _log_publish(job_id, name, "STARTED", "Upload started",
+                     details={"title": title, "video": str(final_video_path)})
         try:
             result = publisher.publish(
                 video_path = final_video_path,
                 title      = title,
                 caption    = caption,
-                hashtags   = hashtags,
+                hashtags   = _hashtags_for(name),
                 job        = job,
             )
             result.setdefault("platform", name)
             result.setdefault("status", "SUCCESS")
-            logger.info("Published to %s: %s", name, result.get("platform_url"))
+            logger.info("[%s] Upload complete → %s", name.upper(), result.get("platform_url"))
         except Exception as exc:
-            logger.error("Failed to publish to %s: %s", name, exc, exc_info=True)
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error("[%s] Upload FAILED: %s", name.upper(), exc)
+            logger.debug("[%s] Full traceback:\n%s", name.upper(), error_detail)
             result = {
                 "platform":      name,
                 "status":        "FAILED",
-                "error_message": str(exc),
+                "error_message": f"{type(exc).__name__}: {exc}",
+                "error_detail":  error_detail,
             }
         results.append(result)
 

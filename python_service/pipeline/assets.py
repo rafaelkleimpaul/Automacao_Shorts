@@ -25,6 +25,9 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 MUSIC_EXTS = {".mp3", ".wav", ".ogg", ".aac", ".m4a"}
 
+# Subdirectory inside each broll profile where used files are stored
+USED_DIR_NAME = "_used"
+
 
 class Asset(NamedTuple):
     path: Path
@@ -37,12 +40,65 @@ class Asset(NamedTuple):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _scan_dir(directory: Path, extensions: set[str]) -> list[Path]:
+    """Scan directory for files with the given extensions, excluding _used/ subfolder."""
     if not directory.exists():
         return []
+    used_dir = directory / USED_DIR_NAME
     return [
         p for p in directory.rglob("*")
-        if p.is_file() and p.suffix.lower() in extensions
+        if p.is_file()
+        and p.suffix.lower() in extensions
+        and used_dir not in p.parents  # skip files inside _used/
     ]
+
+
+def _rotate_used_back(directory: Path, extensions: set[str]) -> None:
+    """
+    Move all files from <directory>/_used/ back to <directory>.
+    Called automatically when the active pool is exhausted so the
+    pipeline never stalls.
+    """
+    used_dir = directory / USED_DIR_NAME
+    if not used_dir.exists():
+        return
+    files = [p for p in used_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions]
+    if not files:
+        return
+    logger.info(
+        "B-roll pool exhausted in '%s' — rotating %d file(s) back from _used/",
+        directory.name, len(files),
+    )
+    for f in files:
+        dest = directory / f.name
+        # Avoid name collision with a counter suffix
+        if dest.exists():
+            dest = directory / f"{f.stem}_r{dest.stat().st_ino}{f.suffix}"
+        f.rename(dest)
+
+
+def mark_broll_used(assets: list["Asset"]) -> None:
+    """
+    Move each b-roll asset file (video/image) to a _used/ subfolder beside it.
+    This prevents the same clip from being reused in future videos.
+    Music files are intentionally NOT moved (rotation by random is sufficient).
+    """
+    for asset in assets:
+        if asset.kind not in ("video", "image"):
+            continue
+        src: Path = asset.path
+        if not src.exists():
+            continue
+        used_dir = src.parent / USED_DIR_NAME
+        used_dir.mkdir(exist_ok=True)
+        dest = used_dir / src.name
+        # Handle unlikely name collision
+        if dest.exists():
+            dest = used_dir / f"{src.stem}_{src.stat().st_ino}{src.suffix}"
+        try:
+            src.rename(dest)
+            logger.info("Marked used: %s → _used/%s", src.name, dest.name)
+        except Exception as exc:
+            logger.warning("Could not move '%s' to _used/: %s", src.name, exc)
 
 
 def _score_asset(path: Path, keywords: list[str]) -> int:
@@ -87,13 +143,25 @@ def select_broll(
     video_files  = _scan_dir(profile_dir, VIDEO_EXTS)
     image_files  = _scan_dir(profile_dir, IMAGE_EXTS)
 
-    # Fallback to default if profile is empty
+    # Auto-rotate: if the active pool is empty but _used/ has files, bring them back
+    if not video_files and not image_files:
+        _rotate_used_back(profile_dir, VIDEO_EXTS | IMAGE_EXTS)
+        video_files = _scan_dir(profile_dir, VIDEO_EXTS)
+        image_files = _scan_dir(profile_dir, IMAGE_EXTS)
+
+    # Fallback to default if profile is still empty after rotation
     if not video_files and not image_files:
         logger.warning(
             "No assets in profile '%s', falling back to 'default'", assets_profile
         )
         video_files = _scan_dir(default_dir, VIDEO_EXTS)
         image_files = _scan_dir(default_dir, IMAGE_EXTS)
+
+        # Auto-rotate default pool too if needed
+        if not video_files and not image_files:
+            _rotate_used_back(default_dir, VIDEO_EXTS | IMAGE_EXTS)
+            video_files = _scan_dir(default_dir, VIDEO_EXTS)
+            image_files = _scan_dir(default_dir, IMAGE_EXTS)
 
     if not video_files and not image_files:
         logger.error(

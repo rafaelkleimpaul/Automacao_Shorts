@@ -4,6 +4,8 @@ Shorts Video Worker – FastAPI entry point.
 Endpoints:
   GET  /health                    – liveness + DB probe
   POST /run/{job_id}              – execute pipeline (called by n8n)
+  POST /jobs                      – create a single job (and optionally run it)
+  POST /generate_jobs             – auto-generate jobs from trending news via LLM
   GET  /job/{job_id}              – job status + outputs + publish results
   GET  /jobs                      – list recent jobs
   GET  /serve/{job_id}/{filename} – serve a generated file (used by Instagram)
@@ -20,8 +22,9 @@ from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
-from utils.db import get_conn, get_job, init_pool, update_job_status
+from utils.db import create_job, get_conn, get_job, init_pool, update_job_status
 from utils.logger import configure_logging
 from pipeline.orchestrator import run_pipeline, RUNNABLE_STATUSES
 
@@ -95,6 +98,102 @@ def health() -> dict[str, Any]:
             "tiktok":    os.getenv("TIKTOK_ENABLED", "false"),
         },
     }
+
+
+class JobCreateRequest(BaseModel):
+    main_subject:            str  = Field(..., description="Video topic")
+    niche:                   str  = Field("finance", description="Content niche")
+    language:                str  = Field("en_US")
+    style:                   str  = Field("commentary", description="commentary | educational | listicle")
+    duration_target_seconds: int  = Field(30, ge=15, le=60)
+    assets_profile:          str  = Field("finance")
+    priority:                int  = Field(7, ge=1, le=10)
+    extra_params:            dict = Field(default_factory=dict)
+    auto_run:                bool = Field(True, description="Dispatch pipeline immediately after creation")
+
+
+class GenerateJobsRequest(BaseModel):
+    niche:    str = Field("finance", description="Niche key — see GET /niches for available options")
+    count:    int = Field(3, ge=1, le=10, description="Number of jobs to generate")
+    auto_run: bool = Field(True, description="Dispatch pipeline immediately after creation")
+
+
+@app.post("/jobs", tags=["pipeline"])
+def create_job_endpoint(body: JobCreateRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """
+    Create a single job and optionally start the pipeline immediately.
+    Useful for manual scheduling or external integrations.
+    """
+    job_id = create_job(
+        main_subject=body.main_subject,
+        niche=body.niche,
+        language=body.language,
+        style=body.style,
+        duration_target_seconds=body.duration_target_seconds,
+        assets_profile=body.assets_profile,
+        priority=body.priority,
+        extra_params=body.extra_params,
+    )
+    if body.auto_run:
+        update_job_status(job_id, "PROCESSING")
+        background_tasks.add_task(_run_pipeline_task, job_id)
+
+    return {
+        "status":   "accepted" if body.auto_run else "created",
+        "job_id":   job_id,
+        "message":  "Pipeline started." if body.auto_run else "Job created. Call POST /run/{job_id} to start.",
+    }
+
+
+@app.post("/generate_jobs", tags=["pipeline"])
+def generate_jobs_endpoint(body: GenerateJobsRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    """
+    Fetch trending news for the given niche, use the local LLM to generate
+    video topic ideas, create a job for each, and optionally dispatch them.
+
+    The n8n workflow can call this endpoint on a schedule (e.g. daily at 8am)
+    to run the pipeline fully autonomously.
+    """
+    from pipeline.topic_generator import generate_topics, list_available_niches
+
+    available = list_available_niches()
+    if body.niche not in available:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown niche '{body.niche}'. Available: {available}",
+        )
+
+    try:
+        topics = generate_topics(niche=body.niche, count=body.count)
+    except Exception as exc:
+        logger.error("Topic generation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Topic generation failed: {exc}")
+
+    job_ids: list[str] = []
+    for topic_params in topics:
+        job_id = create_job(**topic_params)
+        if body.auto_run:
+            update_job_status(job_id, "PROCESSING")
+            background_tasks.add_task(_run_pipeline_task, job_id)
+        job_ids.append(job_id)
+        logger.info("Job created%s: %s — %s",
+                    " and dispatched" if body.auto_run else "",
+                    job_id, topic_params["main_subject"])
+
+    return {
+        "status":   "accepted" if body.auto_run else "created",
+        "niche":    body.niche,
+        "count":    len(job_ids),
+        "job_ids":  job_ids,
+        "message":  f"{len(job_ids)} jobs {'started' if body.auto_run else 'created — call POST /run/{{id}} to start each'}.",
+    }
+
+
+@app.get("/niches", tags=["pipeline"])
+def list_niches() -> dict[str, Any]:
+    """List available niche configurations for topic generation."""
+    from pipeline.topic_generator import list_available_niches
+    return {"niches": list_available_niches()}
 
 
 @app.post("/run/{job_id}", tags=["pipeline"])
@@ -261,6 +360,57 @@ def list_publish_results(limit: int = 50) -> list[dict[str, Any]]:
                 (min(limit, 200),),
             )
             return [dict(row) for row in cur.fetchall()]
+
+
+@app.get("/publish_logs", tags=["publishing"])
+def list_publish_logs(
+    platform: str | None = None,
+    job_id:   str | None = None,
+    level:    str | None = None,
+    limit:    int = 100,
+) -> list[dict[str, Any]]:
+    """
+    List publish_logs entries with optional filters.
+
+    Query params:
+      platform  – filter by platform (youtube | instagram | tiktok)
+      job_id    – filter by job UUID
+      level     – filter by level (INFO | ERROR | WARNING)
+      limit     – max rows (default 100)
+    """
+    import psycopg2.extras
+    conditions = []
+    params: list[Any] = []
+
+    if platform:
+        conditions.append("l.platform = %s")
+        params.append(platform.lower())
+    if job_id:
+        conditions.append("l.job_id = %s")
+        params.append(job_id)
+    if level:
+        conditions.append("l.level = %s")
+        params.append(level.upper())
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(min(limit, 500))
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    l.id, l.created_at, l.platform, l.level, l.event,
+                    l.message, l.details, l.job_id, j.main_subject
+                FROM   publish_logs l
+                JOIN   video_jobs   j ON j.id = l.job_id
+                {where}
+                ORDER  BY l.created_at DESC
+                LIMIT  %s
+                """,
+                params,
+            )
+            return [dict(r) for r in cur.fetchall()]
 
 
 @app.get("/", include_in_schema=False)
