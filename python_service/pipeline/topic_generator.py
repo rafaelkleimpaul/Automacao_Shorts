@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 LLM_ENDPOINT: str = os.environ.get("LLM_ENDPOINT", "http://host.docker.internal:11434/api/generate")
 LLM_MODEL:    str = os.environ.get("LLM_MODEL", "llama3")
+LLM_API_KEY:  str = os.environ.get("LLM_API_KEY", "")
 LLM_TIMEOUT:  int = int(os.environ.get("LLM_TIMEOUT", "120"))
 
 # Topic deduplication settings
@@ -134,8 +135,9 @@ def _call_llm(prompt: str, system: str) -> str:
             "temperature": 0.85,
             "max_tokens":  600,
         }
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}"} if LLM_API_KEY else {}
         with httpx.Client(timeout=LLM_TIMEOUT) as client:
-            resp = client.post(LLM_ENDPOINT, json=payload)
+            resp = client.post(LLM_ENDPOINT, json=payload, headers=headers)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
 
