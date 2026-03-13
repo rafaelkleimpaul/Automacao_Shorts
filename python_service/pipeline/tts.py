@@ -27,10 +27,31 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
-TTS_ENDPOINT: str = os.environ.get("TTS_ENDPOINT", "http://host.docker.internal:5500/synthesize")
-TTS_VOICE:    str = os.environ.get("TTS_VOICE", "en-US-Standard-D")
+TTS_ENDPOINT: str = os.environ.get("TTS_ENDPOINT", "http://host.docker.internal:8880/v1/audio/speech")
+TTS_VOICE:    str = os.environ.get("TTS_VOICE", "af_heart")
 TTS_SPEED:  float = float(os.environ.get("TTS_SPEED", "1.0"))
 TIMEOUT:      int = int(os.environ.get("TTS_TIMEOUT", "120"))
+
+
+def _build_payload(text: str) -> dict:
+    """Build the TTS request payload based on the endpoint type."""
+    endpoint = TTS_ENDPOINT.lower()
+    if "v1/audio/speech" in endpoint:
+        # OpenAI-compatible TTS API (Kokoro, OpenAI, etc.)
+        return {
+            "model": "kokoro",
+            "input": text,
+            "voice": TTS_VOICE,
+            "response_format": "wav",
+            "speed": TTS_SPEED,
+        }
+    # Generic / Coqui / Piper-style
+    return {
+        "text": text,
+        "language": "en_US",
+        "voice": TTS_VOICE,
+        "speed": TTS_SPEED,
+    }
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10), reraise=True)
@@ -39,12 +60,7 @@ def generate_voice(text: str, output_path: Path) -> Path:
     Send text to TTS endpoint and save resulting WAV to output_path.
     Returns the output_path on success.
     """
-    payload = {
-        "text": text,
-        "language": "en_US",
-        "voice": TTS_VOICE,
-        "speed": TTS_SPEED,
-    }
+    payload = _build_payload(text)
 
     logger.info("Calling TTS at %s (voice=%s, chars=%d)", TTS_ENDPOINT, TTS_VOICE, len(text))
 

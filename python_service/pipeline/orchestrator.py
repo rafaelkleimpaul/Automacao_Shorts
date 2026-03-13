@@ -30,6 +30,7 @@ from utils.db import (
     get_completed_steps,
     get_conn,
     get_job,
+    log_publish,
     mark_step_done,
     mark_step_failed,
     mark_step_started,
@@ -179,6 +180,8 @@ def _step_asset_select(ctx: dict) -> None:
 
 
 def _step_render(ctx: dict) -> None:
+    from pipeline.assets import mark_broll_used
+
     final_path = render_video(
         job_dir        = ctx["job_dir"],
         voice_path     = ctx["voice_path"],
@@ -194,17 +197,29 @@ def _step_render(ctx: dict) -> None:
         duration_s=ctx["duration"],
     )
 
+    # Move used b-roll to _used/ so the same clips aren't reused next time
+    mark_broll_used(ctx["broll"])
+
 
 def _step_post_pack(ctx: dict) -> None:
+    from pipeline.hashtag_booster import boost_for_all_platforms
+
     script  = ctx["script"]
     job     = ctx["job"]
     job_dir = ctx["job_dir"]
 
-    hashtags = " ".join(script.get("hashtags", []))
+    boosted = boost_for_all_platforms(
+        script.get("hashtags", []),
+        niche=job.get("niche", "finance"),
+    )
+    ctx["boosted_hashtags"] = boosted
+
+    ig_hashtags      = boosted.get("instagram", boosted.get("default", script.get("hashtags", [])))
+    hashtags_display = " ".join(ig_hashtags)
     caption  = (
         f"{script.get('title', '')}\n\n"
         f"{script.get('hook', '')}\n\n"
-        f"{hashtags}\n\n"
+        f"{hashtags_display}\n\n"
         f"---\n"
         f"{script.get('disclaimer', 'This video is for educational purposes only.')}"
     )
@@ -217,7 +232,9 @@ def _step_post_pack(ctx: dict) -> None:
         f"Lang   : {job.get('language', 'en_US')}\n\n"
         f"--- TITLE ---\n{script.get('title', '')}\n\n"
         f"--- CAPTION ---\n{caption}\n\n"
-        f"--- HASHTAGS ---\n{hashtags}\n\n"
+        f"--- HASHTAGS (Instagram/30) ---\n{' '.join(boosted.get('instagram', []))}\n\n"
+        f"--- HASHTAGS (YouTube/15) ---\n{' '.join(boosted.get('youtube', []))}\n\n"
+        f"--- HASHTAGS (TikTok/20) ---\n{' '.join(boosted.get('tiktok', []))}\n\n"
         f"--- KEYWORDS ---\n{', '.join(script.get('keywords', []))}\n\n"
         f"--- DISCLAIMER ---\n{script.get('disclaimer', '')}\n\n"
         f"--- FILES ---\n"
@@ -251,7 +268,8 @@ def _step_publish(ctx: dict) -> None:
     script   = ctx["script"]
     job      = ctx["job"]
     title    = script.get("title", job.get("main_subject", "Finance Tips"))
-    hashtags = script.get("hashtags", [])
+    # Use boosted hashtags if available (set by POST_PACK step), fall back to raw LLM hashtags
+    boosted_hashtags = ctx.get("boosted_hashtags") or {}
     hook     = script.get("hook", "")
     voiceover_snippet = script.get("voiceover", "")[:500]
     disclaimer = script.get(
@@ -267,7 +285,7 @@ def _step_publish(ctx: dict) -> None:
         final_video_path = ctx["final_path"],
         title            = title,
         caption          = caption,
-        hashtags         = hashtags,
+        hashtags         = boosted_hashtags if boosted_hashtags else script.get("hashtags", []),
     )
     ctx["publish_results"] = results
 
@@ -278,18 +296,47 @@ def _step_publish(ctx: dict) -> None:
     successes = [r for r in results if r.get("status") == "SUCCESS"]
     failures  = [r for r in results if r.get("status") == "FAILED"]
 
+    # ── Per-platform log → publish_logs table ─────────────────────────────────
+    for r in results:
+        platform = r.get("platform", "unknown")
+        if r.get("status") == "SUCCESS":
+            log_publish(
+                ctx["job_id"], platform, "SUCCESS",
+                f"Published successfully → {r.get('platform_url')}",
+                level="INFO",
+                details={"url": r.get("platform_url"), "post_id": r.get("platform_post_id")},
+            )
+            logger.info("[PUBLISH] ✓ %s → %s", platform.upper(), r.get("platform_url"))
+        else:
+            log_publish(
+                ctx["job_id"], platform, "FAILED",
+                r.get("error_message", "Unknown error"),
+                level="ERROR",
+                details={"error": r.get("error_message"), "detail": r.get("error_detail", "")},
+            )
+            logger.error("[PUBLISH] ✗ %s — %s", platform.upper(), r.get("error_message"))
+
+    # ── Summary banner ────────────────────────────────────────────────────────
+    sep = "─" * 50
+    logger.info(sep)
+    logger.info("PUBLISH SUMMARY  job=%s", ctx["job_id"])
+    logger.info("  Platforms attempted : %d", len(results))
+    logger.info("  Succeeded           : %d  %s", len(successes),
+                [r.get("platform") for r in successes])
+    logger.info("  Failed              : %d  %s", len(failures),
+                [r.get("platform") for r in failures])
+    if failures:
+        for r in failures:
+            logger.error("  [%s] error: %s", r.get("platform", "?").upper(),
+                         r.get("error_message"))
+    logger.info(sep)
+
     if successes and not failures:
         ctx["final_status"] = "PUBLISHED"
-        logger.info("All platforms published successfully: %s",
-                    [r.get("platform_url") for r in successes])
     elif successes and failures:
         ctx["final_status"] = "PUBLISHED"   # partial success still counts
-        logger.warning("Partially published. Successes: %d, Failures: %d",
-                       len(successes), len(failures))
     else:
         ctx["final_status"] = "PUBLISH_FAILED"
-        logger.error("All platform publishes failed: %s",
-                     [r.get("error_message") for r in failures])
 
 
 def _save_publish_results(job_id: str, results: list[dict]) -> None:

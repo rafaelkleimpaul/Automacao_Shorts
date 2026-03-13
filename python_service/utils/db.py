@@ -54,6 +54,40 @@ def get_conn() -> Generator[psycopg2.extensions.connection, None, None]:
 # Job helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def create_job(
+    main_subject: str,
+    niche: str = "finance",
+    language: str = "en_US",
+    style: str = "commentary",
+    duration_target_seconds: int = 30,
+    assets_profile: str = "finance",
+    priority: int = 7,
+    extra_params: Optional[dict] = None,
+) -> str:
+    """Insert a new job into video_jobs and return its UUID string."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO video_jobs (
+                    main_subject, niche, language, style,
+                    duration_target_seconds, assets_profile, priority,
+                    scheduled_at, extra_params
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                RETURNING id
+                """,
+                (
+                    main_subject, niche, language, style,
+                    duration_target_seconds, assets_profile, priority,
+                    json.dumps(extra_params or {}),
+                ),
+            )
+            job_id = str(cur.fetchone()[0])
+        conn.commit()
+    logger.info("Created job %s — %s", job_id, main_subject)
+    return job_id
+
+
 def get_job(job_id: str) -> Optional[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -180,6 +214,27 @@ def mark_step_failed(job_id: str, step_name: str, error: str) -> None:
 # Log helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def log_publish(
+    job_id: str,
+    platform: str,
+    event: str,
+    message: str,
+    level: str = "INFO",
+    details: Optional[dict] = None,
+) -> None:
+    """Insert a row into publish_logs for a specific platform event."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO publish_logs (job_id, platform, level, event, message, details)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (job_id, platform.lower(), level, event, message, json.dumps(details or {})),
+            )
+        conn.commit()
+
+
 def log_step(
     job_id: str,
     step_name: str,
@@ -202,6 +257,40 @@ def log_step(
 # ─────────────────────────────────────────────────────────────────────────────
 # Asset tracking
 # ─────────────────────────────────────────────────────────────────────────────
+
+def find_similar_topics(
+    subject: str,
+    niche: str,
+    days: int = 30,
+    threshold: float = 0.45,
+) -> list[dict]:
+    """
+    Return recent video_jobs with a main_subject similar to subject.
+    Uses pg_trgm trigram similarity.
+
+    Returns list of dicts with keys: main_subject, sim (0..1), created_at.
+    Empty list means no duplicates found.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    j.main_subject,
+                    similarity(lower(j.main_subject), lower(%s))::float AS sim,
+                    j.created_at
+                FROM video_jobs j
+                WHERE j.niche       = %s
+                  AND j.created_at >= NOW() - make_interval(days => %s)
+                  AND j.status NOT IN ('CANCELLED', 'DEAD_LETTER')
+                  AND similarity(lower(j.main_subject), lower(%s)) >= %s
+                ORDER BY sim DESC
+                LIMIT 5
+                """,
+                (subject, niche, days, subject, threshold),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
 
 def save_asset(
     job_id: str,

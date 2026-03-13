@@ -45,9 +45,9 @@ def main() -> None:
     print("  • An Instagram Business or Creator account linked to a Facebook Page")
     print()
 
-    short_token = input("Paste the short-lived access token: ").strip()
-    app_id      = input("Your App ID: ").strip()
-    app_secret  = input("Your App Secret: ").strip()
+    short_token = input("Short-lived access token (from Graph API Explorer): ").strip()
+    app_id      = input("App ID: ").strip()
+    app_secret  = input("App Secret: ").strip()
 
     # ── Step 1: Exchange for long-lived token (60 days) ────────────────────
     print("\n🔄 Exchanging for long-lived token…")
@@ -68,41 +68,14 @@ def main() -> None:
     long_token = resp.json()["access_token"]
     print("✅ Long-lived token obtained (valid for ~60 days)")
 
-    # ── Step 2: List Facebook Pages ────────────────────────────────────────
-    print("\n📋 Fetching your Facebook Pages…")
-    pages_resp = requests.get(
-        "https://graph.facebook.com/v21.0/me/accounts",
-        params={"access_token": long_token},
-        timeout=15,
-    )
-    pages_resp.raise_for_status()
-    pages = pages_resp.json().get("data", [])
-
-    if not pages:
-        print("\n❌ No Facebook Pages found on this account.")
-        print("   Make sure your account manages at least one Facebook Page,")
-        print("   and that the Page is connected to an Instagram Business account.")
-        sys.exit(1)
-
-    print("\nYour Facebook Pages:")
-    for i, page in enumerate(pages):
-        print(f"  [{i}] {page['name']}  (Page ID: {page['id']})")
-
-    idx = int(input("\nSelect the Page number: ").strip())
-    if idx < 0 or idx >= len(pages):
-        print("❌ Invalid selection.")
-        sys.exit(1)
-
-    selected_page  = pages[idx]
-    page_token     = selected_page["access_token"]
-
-    # ── Step 3: Get Instagram Business Account ID ───────────────────────────
-    print("\n🔍 Fetching Instagram Business Account…")
+    # ── Step 2: Get Instagram Business Account via Page ID ─────────────────
+    page_id = str("102668781448965").strip()
+    print(f"\n🔍 Fetching Instagram Business Account from Page {page_id}…")
     ig_resp = requests.get(
-        f"https://graph.facebook.com/v21.0/{selected_page['id']}",
+        f"https://graph.facebook.com/v21.0/{page_id}",
         params={
-            "fields":       "instagram_business_account",
-            "access_token": page_token,
+            "fields":       "id,name,instagram_business_account",
+            "access_token": long_token,
         },
         timeout=15,
     )

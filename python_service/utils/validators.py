@@ -68,22 +68,31 @@ def validate_script(script: dict[str, Any], duration_target: int) -> list[str]:
             f"target {duration_target}s (max {duration_target + tolerance:.1f}s)"
         )
 
+    # Normalize scenes: LLM sometimes returns a dict instead of a list
+    scenes_raw = script.get("scenes", [])
+    if isinstance(scenes_raw, dict):
+        scenes_raw = list(scenes_raw.values())
+    scenes: list = scenes_raw if isinstance(scenes_raw, list) else []
+
+    # Normalize captions: LLM sometimes returns a string instead of a list
+    captions_raw = script.get("on_screen_captions", [])
+    captions: list = captions_raw if isinstance(captions_raw, list) else [captions_raw] if captions_raw else []
+
     # Forbidden terms (case-insensitive)
     full_text = " ".join([
         script.get("title", ""),
         script.get("hook", ""),
         voiceover_text,
-        " ".join(script.get("on_screen_captions", [])),
+        " ".join(str(c) for c in captions),
     ]).lower()
 
     for term in FORBIDDEN_TERMS:
         if term in full_text:
             errors.append(f"Forbidden term found: '{term}'")
 
-    # Scenes
-    scenes = script.get("scenes", [])
-    if not (2 <= len(scenes) <= 8):
-        errors.append(f"Expected 2–8 scenes, got {len(scenes)}")
+    # Scenes — minimum 1 (LLM may generate fewer when content is short)
+    if not (1 <= len(scenes) <= 10):
+        errors.append(f"Expected 1–10 scenes, got {len(scenes)}")
     for i, scene in enumerate(scenes):
         if not isinstance(scene, dict):
             errors.append(f"Scene {i} must be a dict")
@@ -91,13 +100,15 @@ def validate_script(script: dict[str, Any], duration_target: int) -> list[str]:
         if "description" not in scene:
             errors.append(f"Scene {i} missing 'description'")
 
-    # Hashtags
-    hashtags = script.get("hashtags", [])
-    if not (3 <= len(hashtags) <= 30):
-        errors.append(f"Expected 3–30 hashtags, got {len(hashtags)}")
+    # Hashtags — normalize string → list
+    hashtags_raw = script.get("hashtags", [])
+    hashtags: list = hashtags_raw if isinstance(hashtags_raw, list) else [hashtags_raw] if hashtags_raw else []
+    if not (1 <= len(hashtags) <= 30):
+        errors.append(f"Expected 1–30 hashtags, got {len(hashtags)}")
 
-    # Keywords (for asset mapping)
-    keywords = script.get("keywords", [])
+    # Keywords — normalize string → list, then check presence
+    keywords_raw = script.get("keywords", [])
+    keywords: list = keywords_raw if isinstance(keywords_raw, list) else [keywords_raw] if keywords_raw else []
     if not keywords:
         errors.append("No keywords provided for asset mapping")
 

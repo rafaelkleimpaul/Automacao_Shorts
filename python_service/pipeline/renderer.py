@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -29,14 +29,20 @@ logger = logging.getLogger(__name__)
 W, H, FPS = 1080, 1920, 30
 MUSIC_VOLUME = 0.08          # 8 % — barely audible under voice
 VOICE_VOLUME = 1.0
-FONT_NAME    = "DejaVu-Sans-Bold"   # available in Debian; change if using custom font
-FONT_SIZE    = 52
-FONT_COLOR   = "white"
-OUTLINE_SIZE = 3
 VIDEO_EXTS   = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 IMAGE_EXTS   = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 FONTS_DIR = Path(os.environ.get("DATA_ROOT", "/data")) / "assets" / "fonts"
+
+# ── Subtitle style (values are real pixels at PlayResY=1920) ─────────────────
+# Tweak these to change the look without touching any FFmpeg flags.
+SUB_FONT        = "Ariali.ttf"       # font family (Arial is embedded via libass fallback)
+SUB_SIZE        = 42           # px — real pixel height on the 1920-tall frame
+SUB_BOLD        = True
+SUB_OUTLINE     = 1.8           # px — thin outline for readability on any background
+SUB_SHADOW      = 0.0           # px — 0 = no shadow
+SUB_ALIGNMENT   = 2             # 2=bottom-center  5=middle-center  8=top-center
+SUB_MARGIN_V    = 180           # px from the aligned edge (bottom when Alignment=2)
 
 
 def _ffprobe_duration(path: Path) -> float:
@@ -192,6 +198,74 @@ def _build_audio_mix(
     return output_path
 
 
+def _srt_to_ass(srt_path: Path) -> Path:
+    """
+    Convert an SRT file to a fully-styled ASS file.
+
+    PlayResX/PlayResY are set to the actual output resolution (1080×1920) so
+    SUB_SIZE is always in real screen pixels — no hidden scaling surprises.
+    """
+    ass_path = srt_path.with_suffix(".ass")
+
+    font_file = FONTS_DIR / "Arial.ttf"
+    fontname   = SUB_FONT
+    extra_font = f"FontFile={font_file}," if font_file.exists() else ""
+
+    bold_flag  = -1 if SUB_BOLD else 0
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {W}\n"
+        f"PlayResY: {H}\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{fontname},{SUB_SIZE},"
+        f"&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        f"{bold_flag},0,0,0,100,100,0,0,"
+        f"1,{SUB_OUTLINE:.2f},{SUB_SHADOW:.2f},"
+        f"{SUB_ALIGNMENT},10,10,{SUB_MARGIN_V},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    srt_text = srt_path.read_text(encoding="utf-8")
+    events: list[str] = []
+
+    for block in re.split(r"\n\n+", srt_text.strip()):
+        lines = [l for l in block.strip().splitlines() if l.strip()]
+        if len(lines) < 2:
+            continue
+        tc_line = next((l for l in lines if "-->" in l), None)
+        if tc_line is None:
+            continue
+        tc_idx = lines.index(tc_line)
+        text   = r"\N".join(lines[tc_idx + 1:])
+
+        m = re.match(
+            r"(\d+):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d+):(\d{2}):(\d{2}),(\d{3})",
+            tc_line,
+        )
+        if not m:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = m.groups()
+        start = f"{int(h1)}:{m1}:{s1}.{ms1[:2]}"
+        end   = f"{int(h2)}:{m2}:{s2}.{ms2[:2]}"
+
+        events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+
+    ass_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
+    logger.debug("ASS subtitle written: %s (%d events)", ass_path, len(events))
+    return ass_path
+
+
 def _burn_subtitles(
     video_path: Path,
     audio_path: Path,
@@ -199,46 +273,15 @@ def _burn_subtitles(
     output_path: Path,
     total_duration: float,
 ) -> Path:
-    """Combine background video + mixed audio and burn SRT subtitles."""
-    # Escape srt path for FFmpeg subtitles filter
-    srt_str = str(srt_path).replace(":", "\\:").replace("'", "\\'")
-
-    # Custom font if available
-    font_file = FONTS_DIR / "Arial.ttf"
-    if font_file.exists():
-        force_style = (
-            f"FontFile={font_file},"
-            f"FontSize={FONT_SIZE},"
-            f"PrimaryColour=&H00FFFFFF&,"
-            f"OutlineColour=&H00000000&,"
-            f"BackColour=&H80000000&,"
-            f"Outline={OUTLINE_SIZE},"
-            f"Shadow=0,"
-            f"Bold=1,"
-            f"Alignment=2,"
-            f"MarginV=80"
-        )
-    else:
-        force_style = (
-            f"FontName={FONT_NAME},"
-            f"FontSize={FONT_SIZE},"
-            f"PrimaryColour=&H00FFFFFF&,"
-            f"OutlineColour=&H00000000&,"
-            f"BackColour=&H80000000&,"
-            f"Outline={OUTLINE_SIZE},"
-            f"Shadow=0,"
-            f"Bold=1,"
-            f"Alignment=2,"
-            f"MarginV=80"
-        )
-
-    subtitle_filter = f"subtitles='{srt_str}':force_style='{force_style}'"
+    """Combine background video + mixed audio and burn ASS subtitles."""
+    ass_path = _srt_to_ass(srt_path)
+    ass_str  = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-i", str(audio_path),
-        "-vf", subtitle_filter,
+        "-vf", f"ass='{ass_str}'",
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
