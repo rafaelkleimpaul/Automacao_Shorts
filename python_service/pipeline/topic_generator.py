@@ -54,6 +54,35 @@ NICHE_CONFIGS: dict[str, dict[str, Any]] = {
             "Topics should be specific, timely, and suitable for a 30-second short."
         ),
     },
+    "lifestyle": {
+        "rss_feeds": [],
+        "language":                 "en_US",
+        "style":                    "commentary",
+        "duration_target_seconds":  30,
+        "assets_profile":           "lifestyle",
+        "priority":                 7,
+        "extra_params":             {"tone": "aspirational", "complexity": "beginner"},
+        "llm_system": (
+            "You are a premium short-form video content strategist for luxury lifestyle brands. "
+            "Your videos are hypnotic, aspirational, and impossible to scroll past. "
+            "They capture attention instantly, keep viewers hooked until the last second, "
+            "and trigger an emotional response of desire, status, and aspiration. "
+            "Never suggest generic, weak, or common motivational content. "
+            "Every topic must feel premium, rare, and viral."
+        ),
+        "topic_user_prompt": (
+            "Generate exactly {{count}} viral short-video topic ideas for a premium luxury lifestyle channel.\n\n"
+            "Each topic must:\n"
+            "- Lead with a brutally strong hook that stops the scroll\n"
+            "- Feel like rare, high-value content — not generic\n"
+            "- Revolve around luxury, power, money, achievement, or status\n"
+            "- Be visually intense and suitable for fast-cut short-form video\n"
+            "- Use few but extremely powerful words\n"
+            "- Make viewers want to share, save, and follow\n\n"
+            "Respond ONLY with a JSON array of {{count}} strings — no explanation, no markdown:\n"
+            '[\"Topic 1\", \"Topic 2\"]'
+        ),
+    },
     # ── Future niches ─────────────────────────────────────────────────────────
     # "crypto": {
     #     "rss_feeds": ["https://cointelegraph.com/rss", "https://coindesk.com/arc/outboundfeeds/rss/"],
@@ -155,11 +184,14 @@ def _generate_topics_via_llm(
     niche: str,
     count: int,
     system_prompt: str,
+    topic_user_prompt: str | None = None,
 ) -> list[str]:
     """Ask the LLM to generate video topic ideas based on trending headlines."""
-    headlines_block = "\n".join(f"- {h}" for h in headlines[:20]) if headlines else "(no trend data available)"
-
-    prompt = f"""Trending {niche} news headlines right now:
+    if topic_user_prompt:
+        prompt = topic_user_prompt.replace("{{count}}", str(count))
+    else:
+        headlines_block = "\n".join(f"- {h}" for h in headlines[:20]) if headlines else "(no trend data available)"
+        prompt = f"""Trending {niche} news headlines right now:
 {headlines_block}
 
 Based on these trends, generate exactly {count} short-video topic ideas for a 30-second educational video.
@@ -285,6 +317,7 @@ def generate_topics(niche: str = "finance", count: int = 3) -> list[dict[str, An
         niche=niche,
         count=count,
         system_prompt=config["llm_system"],
+        topic_user_prompt=config.get("topic_user_prompt"),
     )
 
     # ── Deduplication: skip topics too similar to recent ones ─────────────────
