@@ -274,14 +274,15 @@ def _burn_subtitles(
     total_duration: float,
 ) -> Path:
     """Combine background video + mixed audio and burn ASS subtitles."""
-    ass_path = _srt_to_ass(srt_path)
-    ass_str  = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    ass_path  = _srt_to_ass(srt_path)
+    ass_str   = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    fonts_str = str(FONTS_DIR).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-i", str(audio_path),
-        "-vf", f"ass='{ass_str}'",
+        "-vf", f"ass='{ass_str}':fontsdir='{fonts_str}'",
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
@@ -429,14 +430,15 @@ def render_quote_video(
 
     # Step 3: Phrase overlay + final encode
     _phrase_to_ass(phrase, total_duration, ass_path)
-    ass_str = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    ass_str   = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    fonts_str = str(FONTS_DIR).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
     if has_audio:
         cmd = [
             "ffmpeg", "-y",
             "-i", str(bg_path),
             "-i", str(audio_path),
-            "-vf", f"ass='{ass_str}'",
+            "-vf", f"ass='{ass_str}':fontsdir='{fonts_str}'",
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "copy",
@@ -448,7 +450,7 @@ def render_quote_video(
         cmd = [
             "ffmpeg", "-y",
             "-i", str(bg_path),
-            "-vf", f"ass='{ass_str}'",
+            "-vf", f"ass='{ass_str}':fontsdir='{fonts_str}'",
             "-map", "0:v:0",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-an",
