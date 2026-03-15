@@ -10,14 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fontconfig \
         && rm -rf /var/lib/apt/lists/*
 
-# ── Libre Baskerville font (baked into image so libass always finds it) ───────
-RUN mkdir -p /usr/local/share/fonts/librebaskerville \
-    && curl -fL "https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf" \
-            -o /usr/local/share/fonts/librebaskerville/LibreBaskerville-Regular.ttf \
-    && curl -fL "https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Bold.ttf" \
-            -o /usr/local/share/fonts/librebaskerville/LibreBaskerville-Bold.ttf \
-    && fc-cache -f /usr/local/share/fonts/
-
 # ── Python dependencies ───────────────────────────────────────────────────────
 WORKDIR /app
 COPY requirements.txt .
@@ -25,6 +17,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Application source ────────────────────────────────────────────────────────
 COPY . .
+
+# ── Bake fonts from build context into image ─────────────────────────────────
+RUN if ls fonts/*.ttf 2>/dev/null; then \
+        cp fonts/*.ttf /usr/local/share/fonts/ && fc-cache -f /usr/local/share/fonts/; \
+    fi
 
 # ── Data volume (matched with n8n) ────────────────────────────────────────────
 RUN mkdir -p /data/videos /data/assets/broll/finance /data/assets/music /data/assets/fonts \
