@@ -20,24 +20,30 @@ ollama pull llava
 
 ## download_music.py
 
-Baixa o áudio de vídeos do YouTube e salva como `.mp3` na pasta de músicas do projeto.
+Baixa o áudio de vídeos ou playlists do YouTube e salva como `.mp3` na pasta de músicas do projeto.
 
 ### Uso
 
 ```bash
-python scripts/download_music.py <url> [url2 ...] [--profile PROFILE]
+python scripts/download_music.py <url> [url2 ...] [--profile PROFILE] [--no-playlist] [--items RANGE]
 ```
 
 ### Exemplos
 
 ```bash
-# Pasta padrão: data/assets/music/
-python scripts/download_music.py https://www.youtube.com/watch?v=XXXXX
-
-# Pasta específica: data/assets/music/mindset/
+# Vídeo único
 python scripts/download_music.py https://www.youtube.com/watch?v=XXXXX --profile mindset
 
-# Pasta específica: data/assets/music/finance/
+# Playlist completa
+python scripts/download_music.py https://www.youtube.com/playlist?list=XXXXX --profile mindset
+
+# Apenas os 10 primeiros da playlist
+python scripts/download_music.py https://www.youtube.com/playlist?list=XXXXX --profile mindset --items 1-10
+
+# URL de vídeo que contém playlist — baixar só o vídeo
+python scripts/download_music.py "https://www.youtube.com/watch?v=XXX&list=YYY" --no-playlist
+
+# Múltiplos links
 python scripts/download_music.py https://youtu.be/AAA https://youtu.be/BBB --profile finance
 ```
 
@@ -45,8 +51,10 @@ python scripts/download_music.py https://youtu.be/AAA https://youtu.be/BBB --pro
 
 | Parâmetro | Obrigatório | Descrição |
 |---|---|---|
-| `urls` | sim | Um ou mais links do YouTube |
+| `urls` | sim | Um ou mais links do YouTube (vídeo ou playlist) |
 | `--profile` / `-p` | não | Sub-pasta de destino (ex: `mindset`, `finance`) |
+| `--no-playlist` | não | Baixa só o vídeo, ignorando a playlist da URL |
+| `--items` | não | Faixa de itens da playlist: `1-10`, `1,3,5`, `1-5,7` |
 
 ### Copiar para a VPS após download
 
