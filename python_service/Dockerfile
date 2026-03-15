@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── Libre Baskerville font (baked into image so libass always finds it) ───────
 RUN mkdir -p /usr/local/share/fonts/librebaskerville \
-    && curl -fL "https://github.com/google/fonts/raw/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf" \
+    && curl -fL "https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf" \
             -o /usr/local/share/fonts/librebaskerville/LibreBaskerville-Regular.ttf \
-    && curl -fL "https://github.com/google/fonts/raw/main/ofl/librebaskerville/LibreBaskerville-Bold.ttf" \
+    && curl -fL "https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Bold.ttf" \
             -o /usr/local/share/fonts/librebaskerville/LibreBaskerville-Bold.ttf \
     && fc-cache -f /usr/local/share/fonts/
 
