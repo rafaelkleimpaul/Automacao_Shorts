@@ -448,6 +448,20 @@ def weekly_report_endpoint(days: int = 7) -> dict[str, Any]:
     return {"status": "sent", "report": build_weekly_report(days=days)}
 
 
+@app.post("/cleanup", tags=["ops"])
+def cleanup_endpoint(older_than_days: int = 30, dry_run: bool = False) -> dict[str, Any]:
+    """
+    Delete heavy media files (mp4, wav, aac) from jobs older than `older_than_days`
+    days in a terminal status. Metadata files (.json, .txt, .srt) are kept.
+    DB records are never touched.
+
+    Use dry_run=true first to preview what would be deleted without removing anything.
+    Call from an n8n Schedule Trigger weekly (e.g. every Sunday at 03:00).
+    """
+    from pipeline.stock_monitor import cleanup_and_notify
+    return cleanup_and_notify(older_than_days=older_than_days, dry_run=dry_run)
+
+
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "shorts-video-worker", "docs": "/docs"}
