@@ -144,6 +144,10 @@ services:
       TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
       TIKTOK_PRIVACY:       ${TIKTOK_PRIVACY:-PUBLIC_TO_EVERYONE}
 
+      # Telegram notifications
+      TELEGRAM_BOT_TOKEN:   ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID:     ${TELEGRAM_CHAT_ID:-}
+
       # Worker settings
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

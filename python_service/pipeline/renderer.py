@@ -37,7 +37,7 @@ BAKED_FONTS_DIR = Path("/usr/local/share/fonts")
 
 # ── Subtitle style (values are real pixels at PlayResY=1920) ─────────────────
 # Tweak these to change the look without touching any FFmpeg flags.
-SUB_FONT        = "Libre Baskerville"
+SUB_FONT        = "Cormorant Garamond"
 SUB_SIZE        = 42           # px — real pixel height on the 1920-tall frame
 SUB_BOLD        = True
 SUB_OUTLINE     = 1.8           # px — thin outline for readability on any background
@@ -208,7 +208,7 @@ def _srt_to_ass(srt_path: Path) -> Path:
     """
     ass_path = srt_path.with_suffix(".ass")
 
-    font_file = FONTS_DIR / "LibreBaskerville-Regular.ttf"
+    font_file = FONTS_DIR / "CormorantGaramond-Regular.ttf"
     fontname   = SUB_FONT
     extra_font = f"FontFile={font_file}," if font_file.exists() else ""
 
@@ -301,8 +301,8 @@ def _burn_subtitles(
 
 # ── Quote video settings ──────────────────────────────────────────────────────
 QUOTE_FONT         = "Cormorant Garamond"
-QUOTE_OUTLINE      = 2.0
-QUOTE_SHADOW       = 0.5
+QUOTE_OUTLINE      = 0.0
+QUOTE_SHADOW       = 0.0
 QUOTE_ALIGNMENT    = 5      # middle-center
 QUOTE_MUSIC_VOLUME = 0.70   # music is the only audio — keep it audible
 QUOTE_MAX_LINE     = 18     # chars per wrapped line
@@ -327,7 +327,7 @@ def _wrap_phrase(text: str, max_chars: int = QUOTE_MAX_LINE) -> str:
 
 def _phrase_to_ass(phrase: str, duration: float, ass_path: Path) -> Path:
     """Write an ASS file displaying the phrase centred for the full video duration."""
-    font_size = 90 if len(phrase) <= 20 else (80 if len(phrase) <= 40 else 70)
+    font_size = 120 if len(phrase) <= 20 else (105 if len(phrase) <= 40 else 90)
     bold_flag = 0   # regular weight — matches the thin elegant look
 
     def _tc(secs: float) -> str:

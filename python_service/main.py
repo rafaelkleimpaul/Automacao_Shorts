@@ -413,6 +413,29 @@ def list_publish_logs(
             return [dict(r) for r in cur.fetchall()]
 
 
+@app.post("/daily_report", tags=["ops"])
+def daily_report_endpoint() -> dict[str, Any]:
+    """
+    Send full daily report via Telegram: asset stock + server health + stuck jobs.
+    Call from n8n Schedule Trigger every morning before videos start.
+    """
+    from pipeline.stock_monitor import build_stock_report, build_health_report, send_daily_full_report
+    send_daily_full_report()
+    return {
+        "status": "sent",
+        "stock":  build_stock_report(),
+        "health": build_health_report(),
+    }
+
+
+@app.post("/stock_report", tags=["ops"])
+def stock_report_endpoint() -> dict[str, Any]:
+    """Send asset stock report via Telegram (kept for backwards compatibility)."""
+    from pipeline.stock_monitor import build_stock_report, send_daily_report
+    send_daily_report()
+    return {"status": "sent", "report": build_stock_report()}
+
+
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "shorts-video-worker", "docs": "/docs"}

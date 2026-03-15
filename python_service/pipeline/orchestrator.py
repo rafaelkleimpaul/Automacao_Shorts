@@ -216,6 +216,10 @@ def _step_asset_select(ctx: dict) -> None:
     if music:
         save_asset(ctx["job_id"], "music", str(music))
 
+    # Alert if b-roll stock is running low after this selection
+    from pipeline.stock_monitor import check_and_alert_low_stock
+    check_and_alert_low_stock(job.get("assets_profile") or job.get("niche", "finance"))
+
 
 def _step_render(ctx: dict) -> None:
     from pipeline.assets import mark_broll_used
@@ -241,10 +245,23 @@ def _step_render(ctx: dict) -> None:
             music_start    = ctx.get("music_start", 0.0),
         )
     ctx["final_path"] = final_path
+    size_mb = final_path.stat().st_size / (1024 * 1024)
     save_asset(
         ctx["job_id"], "final_video", str(final_path),
         file_size=final_path.stat().st_size,
         duration_s=ctx["duration"],
+    )
+
+    # Telegram: video generated notification
+    from utils.telegram import send_message as _tg
+    job      = ctx["job"]
+    topic    = job.get("main_subject", "N/A")
+    niche    = job.get("niche", "N/A")
+    duration = int(ctx["duration"])
+    _tg(
+        f"✅ <b>Vídeo gerado — {niche}</b>\n"
+        f"📌 {topic}\n"
+        f"⏱ {duration}s | 📁 {size_mb:.1f} MB"
     )
 
     # Move used b-roll to _used/ so the same clips aren't reused next time
@@ -406,6 +423,25 @@ def _step_publish(ctx: dict) -> None:
     else:
         ctx["final_status"] = "PUBLISH_FAILED"
 
+    # Telegram: publish confirmation
+    from utils.telegram import send_message as _tg
+    title = ctx["script"].get("title", ctx["job"].get("main_subject", "N/A"))
+    if successes:
+        lines = [f"🚀 <b>Publicado — {ctx['job'].get('niche', '')}</b>", f"📌 {title}"]
+        for r in successes:
+            platform = r.get("platform", "").capitalize()
+            url      = r.get("platform_url", "")
+            lines.append(f"▶️ {platform}: {url}" if url else f"▶️ {platform}: publicado")
+        if failures:
+            lines.append(f"⚠️ Falhou em: {', '.join(r.get('platform','') for r in failures)}")
+        _tg("\n".join(lines))
+    elif failures:
+        _tg(
+            f"❌ <b>Publicação falhou — {ctx['job'].get('niche', '')}</b>\n"
+            f"📌 {title}\n"
+            + "\n".join(f"  {r.get('platform','')}: {r.get('error_message','')[:200]}" for r in failures)
+        )
+
 
 def _save_publish_results(job_id: str, results: list[dict]) -> None:
     with get_conn() as conn:
@@ -495,6 +531,16 @@ def run_pipeline(job_id: str) -> dict[str, Any]:
         except Exception as exc:
             mark_step_failed(job_id, step, str(exc))
             jl.error(f"Step {step} failed: {exc}", {"error": str(exc)})
+
+            # Telegram failure alert
+            from utils.telegram import send_message as _tg
+            _tg(
+                f"❌ <b>Job falhou — {step}</b>\n"
+                f"Job ID : <code>{job_id}</code>\n"
+                f"Tópico : {job.get('main_subject', 'N/A')}\n"
+                f"Nicho  : {job.get('niche', 'N/A')}\n"
+                f"Erro   : <code>{str(exc)[:300]}</code>"
+            )
 
             # Check if retries exhausted → dead letter
             refreshed_job = get_job(job_id)
