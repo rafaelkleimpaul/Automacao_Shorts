@@ -205,8 +205,12 @@ def _step_asset_select(ctx: dict) -> None:
     )
     music_profile = (job.get("extra_params") or {}).get("music_profile")
     music = select_music(keywords, music_profile=music_profile)
-    ctx["broll"]      = broll
-    ctx["music_path"] = music
+    ctx["broll"]        = broll
+    ctx["music_path"]   = music
+    ctx["music_start"]  = 0.0
+    if music:
+        from pipeline.assets import find_best_segment
+        ctx["music_start"] = find_best_segment(music, ctx["duration"])
     for asset in broll:
         save_asset(ctx["job_id"], asset.kind, str(asset.path))
     if music:
@@ -224,6 +228,7 @@ def _step_render(ctx: dict) -> None:
             broll_assets   = ctx["broll"],
             music_path     = ctx["music_path"],
             total_duration = ctx["duration"],
+            music_start    = ctx.get("music_start", 0.0),
         )
     else:
         final_path = render_video(
@@ -233,6 +238,7 @@ def _step_render(ctx: dict) -> None:
             broll_assets   = ctx["broll"],
             music_path     = ctx["music_path"],
             total_duration = ctx["duration"],
+            music_start    = ctx.get("music_start", 0.0),
         )
     ctx["final_path"] = final_path
     save_asset(

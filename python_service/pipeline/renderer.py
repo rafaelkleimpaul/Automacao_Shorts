@@ -167,10 +167,10 @@ def _build_audio_mix(
     music_path: Optional[Path],
     total_duration: float,
     output_path: Path,
+    music_start: float = 0.0,
 ) -> Path:
     """Mix voice + optional background music into a single AAC track."""
     if music_path and music_path.exists():
-        # amix: voice at full volume + music at MUSIC_VOLUME, duration = voice length
         filter_complex = (
             f"[0:a]volume={VOICE_VOLUME}[voice];"
             f"[1:a]volume={MUSIC_VOLUME},aloop=loop=-1:size=2e+09[music];"
@@ -179,7 +179,7 @@ def _build_audio_mix(
         cmd = [
             "ffmpeg", "-y",
             "-i", str(voice_path),
-            "-i", str(music_path),
+            "-ss", str(music_start), "-i", str(music_path),
             "-filter_complex", filter_complex,
             "-map", "[out]",
             "-c:a", "aac", "-b:a", "128k",
@@ -367,13 +367,14 @@ def _build_music_only_audio(
     music_path: Optional[Path],
     total_duration: float,
     output_path: Path,
+    music_start: float = 0.0,
 ) -> Optional[Path]:
     """Build audio track from music only (no voice). Returns None if no music available."""
     if not music_path or not music_path.exists():
         return None
     cmd = [
         "ffmpeg", "-y",
-        "-i", str(music_path),
+        "-ss", str(music_start), "-i", str(music_path),
         "-filter_complex",
         f"[0:a]volume={QUOTE_MUSIC_VOLUME},aloop=loop=-1:size=2e+09[out]",
         "-map", "[out]",
@@ -391,6 +392,7 @@ def render_quote_video(
     broll_assets: list,
     music_path: Optional[Path],
     total_duration: float,
+    music_start: float = 0.0,
 ) -> Path:
     """
     Render a silent quote video:
@@ -426,7 +428,7 @@ def render_quote_video(
         _run(cmd, "black background")
 
     # Step 2: Music only
-    has_audio = _build_music_only_audio(music_path, total_duration, audio_path)
+    has_audio = _build_music_only_audio(music_path, total_duration, audio_path, music_start=music_start)
 
     # Step 3: Phrase overlay + final encode
     _phrase_to_ass(phrase, total_duration, ass_path)
@@ -494,6 +496,7 @@ def render_video(
     broll_assets: list,       # list of Asset (NamedTuple) from assets.py
     music_path: Optional[Path],
     total_duration: float,
+    music_start: float = 0.0,
 ) -> Path:
     """
     Full render pipeline:
@@ -531,8 +534,8 @@ def render_video(
         _run(cmd, "black background")
 
     # Step 2: Audio mix
-    logger.info("Mixing audio (voice + music)")
-    _build_audio_mix(voice_path, music_path, total_duration, audio_path)
+    logger.info("Mixing audio (voice + music, music_start=%.1fs)", music_start)
+    _build_audio_mix(voice_path, music_path, total_duration, audio_path, music_start=music_start)
 
     # Step 3: Subtitle burn-in + final encode
     logger.info("Burning subtitles and encoding final video")
