@@ -185,12 +185,20 @@ def select_broll(
     return assets
 
 
-def select_music(keywords: list[str] | None = None) -> Path | None:
+def select_music(keywords: list[str] | None = None, music_profile: str | None = None) -> Path | None:
     """
-    Select a background music file from /data/assets/music/.
+    Select a background music file.
+    Looks in /data/assets/music/<music_profile>/ first (if provided), then falls back
+    to /data/assets/music/.
     Randomizes selection for variety; keyword scoring is optional.
     """
-    candidates = _scan_dir(MUSIC_ROOT, MUSIC_EXTS)
+    candidates: list[Path] = []
+    if music_profile:
+        candidates = _scan_dir(MUSIC_ROOT / music_profile, MUSIC_EXTS)
+        if candidates:
+            logger.info("Using music from profile '%s' (%d files)", music_profile, len(candidates))
+    if not candidates:
+        candidates = _scan_dir(MUSIC_ROOT, MUSIC_EXTS)
     if not candidates:
         logger.warning(
             "No music files found in %s. "

@@ -83,6 +83,38 @@ NICHE_CONFIGS: dict[str, dict[str, Any]] = {
             '[\"Topic 1\", \"Topic 2\"]'
         ),
     },
+    "mindset": {
+        "rss_feeds": [],
+        "language":                 "en_US",
+        "style":                    "quote",
+        "duration_target_seconds":  15,
+        "assets_profile":           "mindset",
+        "priority":                 8,
+        "extra_params": {
+            "silent":        True,
+            "music_profile": "mindset",
+            "tone":          "powerful",
+        },
+        "llm_system": (
+            "You are a motivational content creator for viral short-form videos. "
+            "You draw inspiration from books like Rich Dad Poor Dad, The Richest Man in Babylon, "
+            "Think and Grow Rich, The 48 Laws of Power, and Atomic Habits. "
+            "Your phrases are about not giving up, focus, winning, discipline, and conquest. "
+            "Never generate generic or weak motivational clichés."
+        ),
+        "topic_user_prompt": (
+            "Generate exactly {{count}} short powerful phrases for motivational short videos.\n\n"
+            "Rules:\n"
+            "- Maximum 8 words per phrase\n"
+            "- Direct, powerful, impossible to ignore\n"
+            "- About: not failing, focus, winning, studying, discipline, conquest\n"
+            "- Can be inspired by books or original\n"
+            "- All in English\n"
+            "- Examples: 'I will not fail.', 'Focus or fall behind.', 'Winners study. Losers scroll.'\n\n"
+            "Respond ONLY with a JSON array of {{count}} strings — no explanation, no markdown:\n"
+            '[\"Phrase 1\", \"Phrase 2\"]'
+        ),
+    },
     # ── Future niches ─────────────────────────────────────────────────────────
     # "crypto": {
     #     "rss_feeds": ["https://cointelegraph.com/rss", "https://coindesk.com/arc/outboundfeeds/rss/"],

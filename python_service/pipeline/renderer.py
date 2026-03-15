@@ -297,6 +297,172 @@ def _burn_subtitles(
     return output_path
 
 
+# ── Quote video settings ──────────────────────────────────────────────────────
+QUOTE_OUTLINE      = 3.0
+QUOTE_SHADOW       = 1.0
+QUOTE_ALIGNMENT    = 5      # middle-center
+QUOTE_MUSIC_VOLUME = 0.70   # music is the only audio — keep it audible
+QUOTE_MAX_LINE     = 15     # chars per wrapped line
+
+
+def _wrap_phrase(text: str, max_chars: int = QUOTE_MAX_LINE) -> str:
+    """Wrap phrase at word boundaries; returns ASS \\N-separated lines."""
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        width = sum(len(w) for w in current) + len(current)
+        if current and width + len(word) > max_chars:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return r"\N".join(lines)
+
+
+def _phrase_to_ass(phrase: str, duration: float, ass_path: Path) -> Path:
+    """Write an ASS file displaying the phrase centred for the full video duration."""
+    font_size = 90 if len(phrase) <= 20 else (80 if len(phrase) <= 40 else 70)
+    bold_flag = -1
+
+    def _tc(secs: float) -> str:
+        h = int(secs // 3600)
+        m = int((secs % 3600) // 60)
+        s = secs % 60
+        return f"{h}:{m:02d}:{s:05.2f}"
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {W}\n"
+        f"PlayResY: {H}\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Quote,Arial,{font_size},"
+        "&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"{bold_flag},0,0,0,100,100,4,0,"
+        f"1,{QUOTE_OUTLINE:.1f},{QUOTE_SHADOW:.1f},"
+        f"{QUOTE_ALIGNMENT},60,60,60,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    wrapped = _wrap_phrase(phrase)
+    event   = f"Dialogue: 0,{_tc(0.3)},{_tc(duration - 0.2)},Quote,,0,0,0,,{wrapped}\n"
+    ass_path.write_text(header + event, encoding="utf-8")
+    return ass_path
+
+
+def _build_music_only_audio(
+    music_path: Optional[Path],
+    total_duration: float,
+    output_path: Path,
+) -> Optional[Path]:
+    """Build audio track from music only (no voice). Returns None if no music available."""
+    if not music_path or not music_path.exists():
+        return None
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(music_path),
+        "-filter_complex",
+        f"[0:a]volume={QUOTE_MUSIC_VOLUME},aloop=loop=-1:size=2e+09[out]",
+        "-map", "[out]",
+        "-c:a", "aac", "-b:a", "128k",
+        "-t", str(total_duration),
+        str(output_path),
+    ]
+    _run(cmd, "music-only audio")
+    return output_path
+
+
+def render_quote_video(
+    job_dir: Path,
+    phrase: str,
+    broll_assets: list,
+    music_path: Optional[Path],
+    total_duration: float,
+) -> Path:
+    """
+    Render a silent quote video:
+      1. Build background (video b-roll, image slideshow, or black)
+      2. Music-only audio track
+      3. Burn centred phrase text → final.mp4
+    """
+    video_files = [a.path for a in broll_assets if a.kind == "video"]
+    image_files = [a.path for a in broll_assets if a.kind == "image"]
+
+    bg_path    = job_dir / "background.mp4"
+    audio_path = job_dir / "audio_mix.aac"
+    ass_path   = job_dir / "phrase.ass"
+    final_path = job_dir / "final.mp4"
+
+    # Step 1: Background
+    if video_files:
+        logger.info("Building background from %d video files", len(video_files))
+        _build_background_from_videos(video_files, total_duration, bg_path)
+    elif image_files:
+        logger.info("Building slideshow from %d images", len(image_files))
+        _build_background_from_images(image_files, total_duration, bg_path)
+    else:
+        logger.warning("No b-roll assets; using solid black background")
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:r={FPS}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-t", str(total_duration),
+            "-pix_fmt", "yuv420p",
+            str(bg_path),
+        ]
+        _run(cmd, "black background")
+
+    # Step 2: Music only
+    has_audio = _build_music_only_audio(music_path, total_duration, audio_path)
+
+    # Step 3: Phrase overlay + final encode
+    _phrase_to_ass(phrase, total_duration, ass_path)
+    ass_str = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+    if has_audio:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(bg_path),
+            "-i", str(audio_path),
+            "-vf", f"ass='{ass_str}'",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "copy",
+            "-r", str(FPS), "-s", f"{W}x{H}", "-pix_fmt", "yuv420p",
+            "-t", str(total_duration), "-movflags", "+faststart",
+            str(final_path),
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(bg_path),
+            "-vf", f"ass='{ass_str}'",
+            "-map", "0:v:0",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-an",
+            "-r", str(FPS), "-s", f"{W}x{H}", "-pix_fmt", "yuv420p",
+            "-t", str(total_duration), "-movflags", "+faststart",
+            str(final_path),
+        ]
+    _run(cmd, "quote overlay + final render")
+
+    size_mb = final_path.stat().st_size / (1024 * 1024)
+    logger.info("Quote video: %s (%.1f MB)", final_path, size_mb)
+    return final_path
+
+
 def _run(cmd: list[str], step_label: str) -> None:
     logger.info("[FFmpeg:%s] %s", step_label, " ".join(cmd))
     result = subprocess.run(
