@@ -327,7 +327,7 @@ def _wrap_phrase(text: str, max_chars: int = QUOTE_MAX_LINE) -> str:
 
 def _phrase_to_ass(phrase: str, duration: float, ass_path: Path) -> Path:
     """Write an ASS file displaying the phrase centred for the full video duration."""
-    font_size = 62 if len(phrase) <= 20 else (55 if len(phrase) <= 40 else 48)
+    font_size = 90 if len(phrase) <= 20 else (80 if len(phrase) <= 40 else 70)
     bold_flag = 0   # regular weight — matches the thin elegant look
 
     def _tc(secs: float) -> str:
