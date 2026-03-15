@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsndfile1-dev \
         sox \
         curl \
+        fontconfig \
         && rm -rf /var/lib/apt/lists/*
 
 # ── Python dependencies ───────────────────────────────────────────────────────
@@ -17,8 +18,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ── Application source ────────────────────────────────────────────────────────
 COPY . .
 
+# ── Bake fonts from build context into image ─────────────────────────────────
+RUN if ls fonts/*.ttf 2>/dev/null; then \
+        cp fonts/*.ttf /usr/local/share/fonts/ && fc-cache -f /usr/local/share/fonts/; \
+    fi
+
 # ── Data volume (matched with n8n) ────────────────────────────────────────────
-RUN mkdir -p /data/videos /data/assets/broll/finance /data/assets/music /data/assets/fonts
+RUN mkdir -p /data/videos /data/assets/broll/finance /data/assets/music /data/assets/fonts \
+    && mkdir -p /usr/local/share/fonts
 
 # ── Healthcheck ───────────────────────────────────────────────────────────────
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
@@ -26,4 +33,6 @@ HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+CMD ["/entrypoint.sh"]

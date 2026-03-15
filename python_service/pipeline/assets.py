@@ -185,12 +185,67 @@ def select_broll(
     return assets
 
 
-def select_music(keywords: list[str] | None = None) -> Path | None:
+def find_best_segment(music_path: Path, duration: float) -> float:
     """
-    Select a background music file from /data/assets/music/.
+    Analyse a music file and return the start offset (seconds) of the most
+    energetic segment that fits within `duration` seconds.
+
+    Snaps the result to the nearest beat for a natural entry point.
+    Falls back to 0.0 if librosa is unavailable or analysis fails.
+    """
+    try:
+        import numpy as np
+        import librosa
+
+        y, sr = librosa.load(str(music_path), mono=True)
+        total_dur = len(y) / sr
+
+        # Music shorter than 1.2× the needed duration → start from beginning
+        if total_dur <= duration * 1.2:
+            return 0.0
+
+        hop_length   = 512
+        rms          = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+        times        = librosa.frames_to_time(range(len(rms)), sr=sr, hop_length=hop_length)
+        window_frames = int(duration * sr / hop_length)
+        max_start_idx = len(rms) - window_frames - 1
+
+        if max_start_idx <= 0:
+            return 0.0
+
+        energies  = [float(np.mean(rms[i : i + window_frames])) for i in range(max_start_idx)]
+        best_idx  = int(np.argmax(energies))
+        best_time = float(times[best_idx])
+
+        # Snap to nearest beat
+        _, beats = librosa.beat.beat_track(y=y, sr=sr)
+        if len(beats) > 0:
+            beat_times = librosa.frames_to_time(beats, sr=sr)
+            beat_idx   = int(np.argmin(np.abs(beat_times - best_time)))
+            best_time  = float(beat_times[beat_idx])
+
+        logger.info("Best music segment: %.1fs / %.1fs total", best_time, total_dur)
+        return best_time
+
+    except Exception as exc:
+        logger.warning("Music analysis failed, starting from 0s: %s", exc)
+        return 0.0
+
+
+def select_music(keywords: list[str] | None = None, music_profile: str | None = None) -> Path | None:
+    """
+    Select a background music file.
+    Looks in /data/assets/music/<music_profile>/ first (if provided), then falls back
+    to /data/assets/music/.
     Randomizes selection for variety; keyword scoring is optional.
     """
-    candidates = _scan_dir(MUSIC_ROOT, MUSIC_EXTS)
+    candidates: list[Path] = []
+    if music_profile:
+        candidates = _scan_dir(MUSIC_ROOT / music_profile, MUSIC_EXTS)
+        if candidates:
+            logger.info("Using music from profile '%s' (%d files)", music_profile, len(candidates))
+    if not candidates:
+        candidates = _scan_dir(MUSIC_ROOT, MUSIC_EXTS)
     if not candidates:
         logger.warning(
             "No music files found in %s. "

@@ -70,6 +70,20 @@ STEPS = [
     "PUBLISH",
 ]
 
+# Silent (quote) pipeline — skips LLM script, TTS and ASR entirely
+STEPS_SILENT = [
+    "INIT",
+    "ASSET_SELECT",
+    "RENDER",
+    "POST_PACK",
+    "PUBLISH",
+]
+
+
+def _is_silent(job: dict) -> bool:
+    """Return True when the job is a silent quote video (no voice/subtitles)."""
+    return bool((job.get("extra_params") or {}).get("silent"))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Context
@@ -79,20 +93,39 @@ def _make_context(job: dict) -> dict[str, Any]:
     job_id   = str(job["id"])
     job_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     job_dir  = VIDEOS_ROOT / job_date / job_id
-    return {
-        "job_id":         job_id,
-        "job":            job,
-        "job_dir":        job_dir,
-        "script":         None,
-        "voice_path":     None,
-        "srt_path":       None,
-        "broll":          [],
-        "music_path":     None,
-        "final_path":     None,
-        "duration":       float(job.get("duration_target_seconds", 30)),
-        "final_status":   "READY_FOR_MANUAL_POST",  # overridden by PUBLISH step
+    ctx: dict = {
+        "job_id":          job_id,
+        "job":             job,
+        "job_dir":         job_dir,
+        "script":          None,
+        "voice_path":      None,
+        "srt_path":        None,
+        "broll":           [],
+        "music_path":      None,
+        "final_path":      None,
+        "duration":        float(job.get("duration_target_seconds", 30)),
+        "final_status":    "READY_FOR_MANUAL_POST",
         "publish_results": [],
     }
+
+    # Pre-populate minimal script for silent quote jobs
+    if _is_silent(job):
+        phrase = job.get("main_subject", "")
+        ctx["script"] = {
+            "phrase":    phrase,
+            "title":     phrase,
+            "hook":      phrase,
+            "voiceover": "",
+            "keywords":  [w.lower() for w in phrase.split() if len(w) > 2],
+            "scenes":    [],
+            "hashtags":  [
+                "#motivation", "#mindset", "#focus", "#discipline",
+                "#success", "#neverquit", "#winning", "#hustle",
+            ],
+            "disclaimer": "",
+        }
+
+    return ctx
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,9 +203,14 @@ def _step_asset_select(ctx: dict) -> None:
         assets_profile = job.get("assets_profile") or job.get("niche", "finance"),
         num_scenes     = max(len(scenes), 3),
     )
-    music = select_music(keywords)
-    ctx["broll"]      = broll
-    ctx["music_path"] = music
+    music_profile = (job.get("extra_params") or {}).get("music_profile")
+    music = select_music(keywords, music_profile=music_profile)
+    ctx["broll"]        = broll
+    ctx["music_path"]   = music
+    ctx["music_start"]  = 0.0
+    if music and _is_silent(job):
+        from pipeline.assets import find_best_segment
+        ctx["music_start"] = find_best_segment(music, ctx["duration"])
     for asset in broll:
         save_asset(ctx["job_id"], asset.kind, str(asset.path))
     if music:
@@ -181,15 +219,27 @@ def _step_asset_select(ctx: dict) -> None:
 
 def _step_render(ctx: dict) -> None:
     from pipeline.assets import mark_broll_used
+    from pipeline.renderer import render_quote_video
 
-    final_path = render_video(
-        job_dir        = ctx["job_dir"],
-        voice_path     = ctx["voice_path"],
-        srt_path       = ctx["srt_path"],
-        broll_assets   = ctx["broll"],
-        music_path     = ctx["music_path"],
-        total_duration = ctx["duration"],
-    )
+    if _is_silent(ctx["job"]):
+        final_path = render_quote_video(
+            job_dir        = ctx["job_dir"],
+            phrase         = ctx["script"]["phrase"],
+            broll_assets   = ctx["broll"],
+            music_path     = ctx["music_path"],
+            total_duration = ctx["duration"],
+            music_start    = ctx.get("music_start", 0.0),
+        )
+    else:
+        final_path = render_video(
+            job_dir        = ctx["job_dir"],
+            voice_path     = ctx["voice_path"],
+            srt_path       = ctx["srt_path"],
+            broll_assets   = ctx["broll"],
+            music_path     = ctx["music_path"],
+            total_duration = ctx["duration"],
+            music_start    = ctx.get("music_start", 0.0),
+        )
     ctx["final_path"] = final_path
     save_asset(
         ctx["job_id"], "final_video", str(final_path),
@@ -207,6 +257,7 @@ def _step_post_pack(ctx: dict) -> None:
     script  = ctx["script"]
     job     = ctx["job"]
     job_dir = ctx["job_dir"]
+    silent  = _is_silent(job)
 
     boosted = boost_for_all_platforms(
         script.get("hashtags", []),
@@ -216,32 +267,49 @@ def _step_post_pack(ctx: dict) -> None:
 
     ig_hashtags      = boosted.get("instagram", boosted.get("default", script.get("hashtags", [])))
     hashtags_display = " ".join(ig_hashtags)
-    caption  = (
-        f"{script.get('title', '')}\n\n"
-        f"{script.get('hook', '')}\n\n"
-        f"{hashtags_display}\n\n"
-        f"---\n"
-        f"{script.get('disclaimer', 'This video is for educational purposes only.')}"
-    )
 
-    post_pack = (
-        f"=== POST PACK ===\n"
-        f"Job ID : {ctx['job_id']}\n"
-        f"Topic  : {job.get('main_subject', '')}\n"
-        f"Niche  : {job.get('niche', 'finance')}\n"
-        f"Lang   : {job.get('language', 'en_US')}\n\n"
-        f"--- TITLE ---\n{script.get('title', '')}\n\n"
-        f"--- CAPTION ---\n{caption}\n\n"
-        f"--- HASHTAGS (Instagram/30) ---\n{' '.join(boosted.get('instagram', []))}\n\n"
-        f"--- HASHTAGS (YouTube/15) ---\n{' '.join(boosted.get('youtube', []))}\n\n"
-        f"--- HASHTAGS (TikTok/20) ---\n{' '.join(boosted.get('tiktok', []))}\n\n"
-        f"--- KEYWORDS ---\n{', '.join(script.get('keywords', []))}\n\n"
-        f"--- DISCLAIMER ---\n{script.get('disclaimer', '')}\n\n"
-        f"--- FILES ---\n"
-        f"Video  : {ctx.get('final_path', 'N/A')}\n"
-        f"SRT    : {ctx.get('srt_path', 'N/A')}\n"
-        f"Script : {job_dir / 'script.json'}\n"
-    )
+    if silent:
+        phrase  = script.get("phrase", job.get("main_subject", ""))
+        caption = f"{phrase}\n\n{hashtags_display}"
+        post_pack = (
+            f"=== POST PACK ===\n"
+            f"Job ID : {ctx['job_id']}\n"
+            f"Phrase : {phrase}\n"
+            f"Niche  : {job.get('niche', 'mindset')}\n"
+            f"Lang   : {job.get('language', 'en_US')}\n\n"
+            f"--- CAPTION ---\n{caption}\n\n"
+            f"--- HASHTAGS (Instagram/30) ---\n{' '.join(boosted.get('instagram', []))}\n\n"
+            f"--- HASHTAGS (YouTube/15) ---\n{' '.join(boosted.get('youtube', []))}\n\n"
+            f"--- HASHTAGS (TikTok/20) ---\n{' '.join(boosted.get('tiktok', []))}\n\n"
+            f"--- FILES ---\n"
+            f"Video  : {ctx.get('final_path', 'N/A')}\n"
+        )
+    else:
+        caption = (
+            f"{script.get('title', '')}\n\n"
+            f"{script.get('hook', '')}\n\n"
+            f"{hashtags_display}\n\n"
+            f"---\n"
+            f"{script.get('disclaimer', 'This video is for educational purposes only.')}"
+        )
+        post_pack = (
+            f"=== POST PACK ===\n"
+            f"Job ID : {ctx['job_id']}\n"
+            f"Topic  : {job.get('main_subject', '')}\n"
+            f"Niche  : {job.get('niche', 'finance')}\n"
+            f"Lang   : {job.get('language', 'en_US')}\n\n"
+            f"--- TITLE ---\n{script.get('title', '')}\n\n"
+            f"--- CAPTION ---\n{caption}\n\n"
+            f"--- HASHTAGS (Instagram/30) ---\n{' '.join(boosted.get('instagram', []))}\n\n"
+            f"--- HASHTAGS (YouTube/15) ---\n{' '.join(boosted.get('youtube', []))}\n\n"
+            f"--- HASHTAGS (TikTok/20) ---\n{' '.join(boosted.get('tiktok', []))}\n\n"
+            f"--- KEYWORDS ---\n{', '.join(script.get('keywords', []))}\n\n"
+            f"--- DISCLAIMER ---\n{script.get('disclaimer', '')}\n\n"
+            f"--- FILES ---\n"
+            f"Video  : {ctx.get('final_path', 'N/A')}\n"
+            f"SRT    : {ctx.get('srt_path', 'N/A')}\n"
+            f"Script : {job_dir / 'script.json'}\n"
+        )
 
     pack_path = job_dir / "post_pack.txt"
     pack_path.write_text(post_pack, encoding="utf-8")
@@ -409,7 +477,8 @@ def run_pipeline(job_id: str) -> dict[str, Any]:
     ctx = _make_context(job)
     _reload_context(ctx, completed)
 
-    for step in STEPS:
+    steps = STEPS_SILENT if _is_silent(job) else STEPS
+    for step in steps:
         jl = JobLogger(job_id, step)
 
         if step in completed:

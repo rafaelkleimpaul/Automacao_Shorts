@@ -21,6 +21,8 @@ data/assets/music/*.wav
 data/assets/music/*.ogg
 data/assets/fonts/*.ttf
 data/assets/fonts/*.otf
+python_service/fonts/*.ttf
+python_service/fonts/*.otf
 
 # Keep placeholder files
 !data/assets/**/.gitkeep

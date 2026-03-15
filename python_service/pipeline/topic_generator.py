@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 LLM_ENDPOINT: str = os.environ.get("LLM_ENDPOINT", "http://host.docker.internal:11434/api/generate")
 LLM_MODEL:    str = os.environ.get("LLM_MODEL", "llama3")
+LLM_API_KEY:  str = os.environ.get("LLM_API_KEY", "")
 LLM_TIMEOUT:  int = int(os.environ.get("LLM_TIMEOUT", "120"))
 
 # Topic deduplication settings
@@ -51,6 +52,67 @@ NICHE_CONFIGS: dict[str, dict[str, Any]] = {
             "You are a finance content strategist specializing in short-form educational videos. "
             "Suggest engaging video topics that are educational only — never personalized financial advice. "
             "Topics should be specific, timely, and suitable for a 30-second short."
+        ),
+    },
+    "lifestyle": {
+        "rss_feeds": [],
+        "language":                 "en_US",
+        "style":                    "commentary",
+        "duration_target_seconds":  30,
+        "assets_profile":           "lifestyle",
+        "priority":                 7,
+        "extra_params":             {"tone": "aspirational", "complexity": "beginner"},
+        "llm_system": (
+            "You are a premium short-form video content strategist for luxury lifestyle brands. "
+            "Your videos are hypnotic, aspirational, and impossible to scroll past. "
+            "They capture attention instantly, keep viewers hooked until the last second, "
+            "and trigger an emotional response of desire, status, and aspiration. "
+            "Never suggest generic, weak, or common motivational content. "
+            "Every topic must feel premium, rare, and viral."
+        ),
+        "topic_user_prompt": (
+            "Generate exactly {{count}} viral short-video topic ideas for a premium luxury lifestyle channel.\n\n"
+            "Each topic must:\n"
+            "- Lead with a brutally strong hook that stops the scroll\n"
+            "- Feel like rare, high-value content — not generic\n"
+            "- Revolve around luxury, power, money, achievement, or status\n"
+            "- Be visually intense and suitable for fast-cut short-form video\n"
+            "- Use few but extremely powerful words\n"
+            "- Make viewers want to share, save, and follow\n\n"
+            "Respond ONLY with a JSON array of {{count}} strings — no explanation, no markdown:\n"
+            '[\"Topic 1\", \"Topic 2\"]'
+        ),
+    },
+    "mindset": {
+        "rss_feeds": [],
+        "language":                 "en_US",
+        "style":                    "quote",
+        "duration_target_seconds":  15,
+        "assets_profile":           "mindset",
+        "priority":                 8,
+        "extra_params": {
+            "silent":        True,
+            "music_profile": "mindset",
+            "tone":          "powerful",
+        },
+        "llm_system": (
+            "You are a motivational content creator for viral short-form videos. "
+            "You draw inspiration from books like Rich Dad Poor Dad, The Richest Man in Babylon, "
+            "Think and Grow Rich, The 48 Laws of Power, and Atomic Habits. "
+            "Your phrases are about not giving up, focus, winning, discipline, and conquest. "
+            "Never generate generic or weak motivational clichés."
+        ),
+        "topic_user_prompt": (
+            "Generate exactly {{count}} short powerful phrases for motivational short videos.\n\n"
+            "Rules:\n"
+            "- Maximum 8 words per phrase\n"
+            "- Direct, powerful, impossible to ignore\n"
+            "- About: not failing, focus, winning, studying, discipline, conquest\n"
+            "- Can be inspired by books or original\n"
+            "- All in English\n"
+            "- Examples: 'I will not fail.', 'Focus or fall behind.', 'Winners study. Losers scroll.'\n\n"
+            "Respond ONLY with a JSON array of {{count}} strings — no explanation, no markdown:\n"
+            '[\"Phrase 1\", \"Phrase 2\"]'
         ),
     },
     # ── Future niches ─────────────────────────────────────────────────────────
@@ -134,8 +196,9 @@ def _call_llm(prompt: str, system: str) -> str:
             "temperature": 0.85,
             "max_tokens":  600,
         }
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}"} if LLM_API_KEY else {}
         with httpx.Client(timeout=LLM_TIMEOUT) as client:
-            resp = client.post(LLM_ENDPOINT, json=payload)
+            resp = client.post(LLM_ENDPOINT, json=payload, headers=headers)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
 
@@ -153,11 +216,14 @@ def _generate_topics_via_llm(
     niche: str,
     count: int,
     system_prompt: str,
+    topic_user_prompt: str | None = None,
 ) -> list[str]:
     """Ask the LLM to generate video topic ideas based on trending headlines."""
-    headlines_block = "\n".join(f"- {h}" for h in headlines[:20]) if headlines else "(no trend data available)"
-
-    prompt = f"""Trending {niche} news headlines right now:
+    if topic_user_prompt:
+        prompt = topic_user_prompt.replace("{{count}}", str(count))
+    else:
+        headlines_block = "\n".join(f"- {h}" for h in headlines[:20]) if headlines else "(no trend data available)"
+        prompt = f"""Trending {niche} news headlines right now:
 {headlines_block}
 
 Based on these trends, generate exactly {count} short-video topic ideas for a 30-second educational video.
@@ -283,6 +349,7 @@ def generate_topics(niche: str = "finance", count: int = 3) -> list[dict[str, An
         niche=niche,
         count=count,
         system_prompt=config["llm_system"],
+        topic_user_prompt=config.get("topic_user_prompt"),
     )
 
     # ── Deduplication: skip topics too similar to recent ones ─────────────────
