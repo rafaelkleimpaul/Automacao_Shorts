@@ -287,7 +287,7 @@ def _filter_duplicates(topics: list[str], niche: str) -> list[str]:
                 best["main_subject"],
                 _days_ago(best["created_at"]),
             )
-            skipped.append(topic)
+            skipped.append((topic, best))
         else:
             kept.append(topic)
 
@@ -297,6 +297,21 @@ def _filter_duplicates(topics: list[str], niche: str) -> list[str]:
             len(kept), len(topics), len(skipped),
             DEDUP_LOOKBACK_DAYS, DEDUP_THRESHOLD * 100,
         )
+        # Telegram alert for blocked topics
+        try:
+            from utils.telegram import send_message
+            lines = [f"⛔ <b>Tópicos bloqueados por duplicidade — {niche}</b>"]
+            for topic, best in skipped:
+                sim_pct = int(best["sim"] * 100)
+                lines.append(
+                    f"❌ \"{topic}\"\n"
+                    f"   ↔️ Similar a: \"{best['main_subject']}\" "
+                    f"({sim_pct}% — {_days_ago(best['created_at'])} atrás)"
+                )
+            send_message("\n".join(lines))
+        except Exception as exc:
+            logger.debug("Telegram dedup alert failed: %s", exc)
+
     return kept
 
 
