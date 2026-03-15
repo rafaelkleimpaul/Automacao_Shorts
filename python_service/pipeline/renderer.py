@@ -347,7 +347,7 @@ def _phrase_to_ass(phrase: str, duration: float, ass_path: Path) -> Path:
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Quote,Arial,{font_size},"
+        f"Style: Quote,{SUB_FONT},{font_size},"
         "&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
         f"{bold_flag},0,0,0,100,100,4,0,"
         f"1,{QUOTE_OUTLINE:.1f},{QUOTE_SHADOW:.1f},"
