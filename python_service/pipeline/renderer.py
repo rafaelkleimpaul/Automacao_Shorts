@@ -36,7 +36,7 @@ FONTS_DIR = Path(os.environ.get("DATA_ROOT", "/data")) / "assets" / "fonts"
 
 # ── Subtitle style (values are real pixels at PlayResY=1920) ─────────────────
 # Tweak these to change the look without touching any FFmpeg flags.
-SUB_FONT        = "Ariali.ttf"       # font family (Arial is embedded via libass fallback)
+SUB_FONT        = "LibreBaskerville-Regular"
 SUB_SIZE        = 42           # px — real pixel height on the 1920-tall frame
 SUB_BOLD        = True
 SUB_OUTLINE     = 1.8           # px — thin outline for readability on any background
@@ -207,7 +207,7 @@ def _srt_to_ass(srt_path: Path) -> Path:
     """
     ass_path = srt_path.with_suffix(".ass")
 
-    font_file = FONTS_DIR / "Arial.ttf"
+    font_file = FONTS_DIR / "LibreBaskerville-Regular.ttf"
     fontname   = SUB_FONT
     extra_font = f"FontFile={font_file}," if font_file.exists() else ""
 
