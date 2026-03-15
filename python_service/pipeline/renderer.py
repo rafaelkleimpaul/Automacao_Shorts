@@ -32,7 +32,8 @@ VOICE_VOLUME = 1.0
 VIDEO_EXTS   = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 IMAGE_EXTS   = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
-FONTS_DIR = Path(os.environ.get("DATA_ROOT", "/data")) / "assets" / "fonts"
+FONTS_DIR       = Path(os.environ.get("DATA_ROOT", "/data")) / "assets" / "fonts"
+BAKED_FONTS_DIR = Path("/usr/local/share/fonts")
 
 # ── Subtitle style (values are real pixels at PlayResY=1920) ─────────────────
 # Tweak these to change the look without touching any FFmpeg flags.
@@ -299,11 +300,12 @@ def _burn_subtitles(
 
 
 # ── Quote video settings ──────────────────────────────────────────────────────
-QUOTE_OUTLINE      = 3.0
-QUOTE_SHADOW       = 1.0
+QUOTE_FONT         = "Cormorant Garamond"
+QUOTE_OUTLINE      = 2.0
+QUOTE_SHADOW       = 0.5
 QUOTE_ALIGNMENT    = 5      # middle-center
 QUOTE_MUSIC_VOLUME = 0.70   # music is the only audio — keep it audible
-QUOTE_MAX_LINE     = 15     # chars per wrapped line
+QUOTE_MAX_LINE     = 18     # chars per wrapped line
 
 
 def _wrap_phrase(text: str, max_chars: int = QUOTE_MAX_LINE) -> str:
@@ -325,8 +327,8 @@ def _wrap_phrase(text: str, max_chars: int = QUOTE_MAX_LINE) -> str:
 
 def _phrase_to_ass(phrase: str, duration: float, ass_path: Path) -> Path:
     """Write an ASS file displaying the phrase centred for the full video duration."""
-    font_size = 90 if len(phrase) <= 20 else (80 if len(phrase) <= 40 else 70)
-    bold_flag = -1
+    font_size = 62 if len(phrase) <= 20 else (55 if len(phrase) <= 40 else 48)
+    bold_flag = 0   # regular weight — matches the thin elegant look
 
     def _tc(secs: float) -> str:
         h = int(secs // 3600)
@@ -347,9 +349,9 @@ def _phrase_to_ass(phrase: str, duration: float, ass_path: Path) -> Path:
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Quote,{SUB_FONT},{font_size},"
+        f"Style: Quote,{QUOTE_FONT},{font_size},"
         "&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        f"{bold_flag},0,0,0,100,100,4,0,"
+        f"{bold_flag},0,0,0,100,100,6,0,"
         f"1,{QUOTE_OUTLINE:.1f},{QUOTE_SHADOW:.1f},"
         f"{QUOTE_ALIGNMENT},60,60,60,1\n"
         "\n"
@@ -433,7 +435,7 @@ def render_quote_video(
     # Step 3: Phrase overlay + final encode
     _phrase_to_ass(phrase, total_duration, ass_path)
     ass_str   = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    fonts_str = str(FONTS_DIR).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    fonts_str = str(BAKED_FONTS_DIR).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
     if has_audio:
         cmd = [
