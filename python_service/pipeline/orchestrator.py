@@ -208,7 +208,7 @@ def _step_asset_select(ctx: dict) -> None:
     ctx["broll"]        = broll
     ctx["music_path"]   = music
     ctx["music_start"]  = 0.0
-    if music:
+    if music and _is_silent(job):
         from pipeline.assets import find_best_segment
         ctx["music_start"] = find_best_segment(music, ctx["duration"])
     for asset in broll:
