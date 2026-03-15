@@ -29,7 +29,10 @@ CREDENTIALS_DIR  = DATA_ROOT / "credentials"
 TOKEN_FILE       = CREDENTIALS_DIR / "youtube_token.json"
 SECRETS_FILE     = CREDENTIALS_DIR / "youtube_client_secrets.json"
 
-YOUTUBE_SCOPES   = ["https://www.googleapis.com/auth/youtube.upload"]
+YOUTUBE_SCOPES   = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 PRIVACY          = os.getenv("YOUTUBE_PRIVACY", "public")
 CATEGORY_ID      = os.getenv("YOUTUBE_CATEGORY_ID", "27")      # Education
 MADE_FOR_KIDS    = os.getenv("YOUTUBE_MADE_FOR_KIDS", "false").lower() == "true"

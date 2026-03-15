@@ -436,6 +436,18 @@ def stock_report_endpoint() -> dict[str, Any]:
     return {"status": "sent", "report": build_stock_report()}
 
 
+@app.post("/weekly_report", tags=["ops"])
+def weekly_report_endpoint(days: int = 7) -> dict[str, Any]:
+    """
+    Fetch YouTube video stats for the last `days` days and send a
+    performance report via Telegram.
+    Call from an n8n Schedule Trigger every Monday morning.
+    """
+    from pipeline.analytics import build_weekly_report, send_weekly_report
+    send_weekly_report(days=days)
+    return {"status": "sent", "report": build_weekly_report(days=days)}
+
+
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "shorts-video-worker", "docs": "/docs"}
