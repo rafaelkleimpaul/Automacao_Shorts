@@ -216,6 +216,10 @@ def _step_asset_select(ctx: dict) -> None:
     if music:
         save_asset(ctx["job_id"], "music", str(music))
 
+    # Alert if b-roll stock is running low after this selection
+    from pipeline.stock_monitor import check_and_alert_low_stock
+    check_and_alert_low_stock(job.get("assets_profile") or job.get("niche", "finance"))
+
 
 def _step_render(ctx: dict) -> None:
     from pipeline.assets import mark_broll_used
@@ -495,6 +499,16 @@ def run_pipeline(job_id: str) -> dict[str, Any]:
         except Exception as exc:
             mark_step_failed(job_id, step, str(exc))
             jl.error(f"Step {step} failed: {exc}", {"error": str(exc)})
+
+            # Telegram failure alert
+            from utils.telegram import send_message as _tg
+            _tg(
+                f"❌ <b>Job falhou — {step}</b>\n"
+                f"Job ID : <code>{job_id}</code>\n"
+                f"Tópico : {job.get('main_subject', 'N/A')}\n"
+                f"Nicho  : {job.get('niche', 'N/A')}\n"
+                f"Erro   : <code>{str(exc)[:300]}</code>"
+            )
 
             # Check if retries exhausted → dead letter
             refreshed_job = get_job(job_id)

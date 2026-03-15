@@ -413,6 +413,17 @@ def list_publish_logs(
             return [dict(r) for r in cur.fetchall()]
 
 
+@app.post("/stock_report", tags=["ops"])
+def stock_report_endpoint() -> dict[str, Any]:
+    """
+    Build and send the asset stock report via Telegram.
+    Call this from an n8n Schedule Trigger every morning before videos start.
+    """
+    from pipeline.stock_monitor import build_stock_report, send_daily_report
+    send_daily_report()
+    return {"status": "sent", "report": build_stock_report()}
+
+
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "shorts-video-worker", "docs": "/docs"}
