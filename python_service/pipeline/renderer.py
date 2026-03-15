@@ -36,7 +36,7 @@ FONTS_DIR = Path(os.environ.get("DATA_ROOT", "/data")) / "assets" / "fonts"
 
 # ── Subtitle style (values are real pixels at PlayResY=1920) ─────────────────
 # Tweak these to change the look without touching any FFmpeg flags.
-SUB_FONT        = "LibreBaskerville-Regular"
+SUB_FONT        = "Libre Baskerville"
 SUB_SIZE        = 42           # px — real pixel height on the 1920-tall frame
 SUB_BOLD        = True
 SUB_OUTLINE     = 1.8           # px — thin outline for readability on any background
