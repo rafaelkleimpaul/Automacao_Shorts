@@ -125,7 +125,7 @@ def _run_pipeline_task(job_id: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
-def health(request: Request, _: None = Depends(verify_api_key)) -> dict[str, Any]:
+def health() -> dict[str, Any]:
     """Liveness + basic DB probe + publishing platform status."""
     try:
         with get_conn() as conn:
