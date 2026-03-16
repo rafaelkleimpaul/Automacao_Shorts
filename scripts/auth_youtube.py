@@ -31,7 +31,10 @@ from pathlib import Path
 CREDENTIALS_DIR = Path("data/credentials")
 SECRETS_FILE    = CREDENTIALS_DIR / "youtube_client_secrets.json"
 TOKEN_FILE      = CREDENTIALS_DIR / "youtube_token.json"
-SCOPES          = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES          = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",   # needed for analytics
+]
 
 
 def main() -> None:

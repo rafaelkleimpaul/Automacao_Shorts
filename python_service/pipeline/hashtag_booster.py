@@ -59,14 +59,24 @@ PLATFORM_MANDATORY: dict[str, list[str]] = {
 }
 
 
+def _load_trending(niche: str) -> list[str]:
+    """Load top trending hashtags from the hashtag_manager cache (if available)."""
+    try:
+        from pipeline.hashtag_manager import load_cached_hashtags
+        return load_cached_hashtags(niche)[:20]   # top 20 trending
+    except Exception:
+        return []
+
+
 def boost(
     llm_hashtags: list[str],
     niche: str = "finance",
     platform: str | None = None,
 ) -> list[str]:
     """
-    Merge LLM-generated hashtags with curated base tags for the given niche.
-    Deduplicates (case-insensitive) and returns platform-limited list.
+    Merge LLM-generated hashtags with trending (cached) + curated base tags.
+
+    Priority order: LLM-specific → trending (dynamic) → curated base → mandatory
 
     Args:
         llm_hashtags : hashtags from the LLM script (may or may not have #)
@@ -76,7 +86,8 @@ def boost(
     Returns:
         Deduplicated, # prefixed list, capped to the platform limit.
     """
-    base = NICHE_BASE_HASHTAGS.get(niche, [])
+    base     = NICHE_BASE_HASHTAGS.get(niche, [])
+    trending = _load_trending(niche)
 
     # Normalise: ensure every tag starts with #
     def _normalise(tag: str) -> str:
@@ -89,10 +100,12 @@ def boost(
     # Mandatory platform tags (always included, deduped alongside the rest)
     mandatory = [_normalise(t) for t in PLATFORM_MANDATORY.get(platform or "", [])]
 
-    # Merge: LLM-specific first, then base tags, then mandatory at the end
+    normalised_trending = [_normalise(t) for t in trending]
+
+    # Merge: LLM-specific → trending → curated base → mandatory
     seen: set[str] = set()
     merged: list[str] = []
-    for tag in normalised_llm + normalised_base + mandatory:
+    for tag in normalised_llm + normalised_trending + normalised_base + mandatory:
         key = tag.lower()
         if key not in seen:
             seen.add(key)

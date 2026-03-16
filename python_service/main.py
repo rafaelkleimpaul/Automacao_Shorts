@@ -436,6 +436,63 @@ def stock_report_endpoint() -> dict[str, Any]:
     return {"status": "sent", "report": build_stock_report()}
 
 
+@app.post("/weekly_report", tags=["ops"])
+def weekly_report_endpoint(days: int = 7) -> dict[str, Any]:
+    """
+    Fetch YouTube video stats for the last `days` days and send a
+    performance report via Telegram.
+    Call from an n8n Schedule Trigger every Monday morning.
+    """
+    from pipeline.analytics import build_weekly_report, send_weekly_report
+    send_weekly_report(days=days)
+    return {"status": "sent", "report": build_weekly_report(days=days)}
+
+
+@app.post("/refresh_hashtags", tags=["ops"])
+def refresh_hashtags_endpoint(niche: str | None = None) -> dict[str, Any]:
+    """
+    Discover trending hashtags for all niches (or a specific one) by analysing
+    top-performing YouTube Shorts. Results are cached and automatically used
+    in every new video's hashtag set.
+
+    Call from an n8n Schedule Trigger every Monday morning (before /weekly_report).
+    Pass ?niche=finance to refresh only one niche.
+    """
+    from pipeline.hashtag_manager import refresh_and_notify, NICHE_SEARCH_QUERIES
+    niches = [niche] if niche else None
+    results = refresh_and_notify(niches=niches)
+    return {
+        "status": "done",
+        "niches": {n: len(tags) for n, tags in results.items()},
+    }
+
+
+@app.get("/hashtags/{niche}", tags=["ops"])
+def get_hashtags(niche: str) -> dict[str, Any]:
+    """Return the current cached hashtags for a niche."""
+    from pipeline.hashtag_manager import load_cached_hashtags, _cache_path
+    import json
+    path = _cache_path(niche)
+    if not path.exists():
+        return {"niche": niche, "hashtags": [], "message": "No cache yet. Call POST /refresh_hashtags first."}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {"niche": niche, "updated_at": data.get("updated_at"), "hashtags": data.get("hashtags", [])}
+
+
+@app.post("/cleanup", tags=["ops"])
+def cleanup_endpoint(older_than_days: int = 30, dry_run: bool = False) -> dict[str, Any]:
+    """
+    Delete heavy media files (mp4, wav, aac) from jobs older than `older_than_days`
+    days in a terminal status. Metadata files (.json, .txt, .srt) are kept.
+    DB records are never touched.
+
+    Use dry_run=true first to preview what would be deleted without removing anything.
+    Call from an n8n Schedule Trigger weekly (e.g. every Sunday at 03:00).
+    """
+    from pipeline.stock_monitor import cleanup_and_notify
+    return cleanup_and_notify(older_than_days=older_than_days, dry_run=dry_run)
+
+
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "shorts-video-worker", "docs": "/docs"}

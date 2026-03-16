@@ -251,3 +251,133 @@ def send_daily_full_report() -> None:
     """Send both stock report and health report in one go."""
     send_daily_report()
     send_message(build_health_report())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cleanup
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Files worth keeping even after cleanup (small, useful for audits)
+_KEEP_EXTENSIONS = {".json", ".txt", ".srt", ".csv"}
+
+# Statuses considered "done" — safe to clean up files
+_TERMINAL_STATUSES = ("PUBLISHED", "READY_FOR_MANUAL_POST", "FAILED", "DEAD_LETTER")
+
+
+def run_cleanup(older_than_days: int = 30, dry_run: bool = False) -> dict:
+    """
+    Delete heavy media files (mp4, wav, aac, ass) from job output directories
+    for jobs older than `older_than_days` days in a terminal status.
+
+    Metadata files (json, txt, srt) are preserved for audit purposes.
+    DB records are never touched.
+
+    Returns a summary dict with counts and bytes freed.
+    """
+    import psycopg2.extras
+    from utils.db import get_conn
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, main_subject, niche, status, output_dir, completed_at
+                    FROM   video_jobs
+                    WHERE  status = ANY(%s)
+                    AND    completed_at < %s
+                    AND    output_dir IS NOT NULL
+                    AND    output_dir != ''
+                    ORDER  BY completed_at ASC
+                    """,
+                    (list(_TERMINAL_STATUSES), cutoff),
+                )
+                jobs = [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        logger.error("Cleanup DB query failed: %s", exc)
+        return {"error": str(exc)}
+
+    total_freed  = 0
+    cleaned_jobs = 0
+    skipped_jobs = 0
+    errors       = 0
+
+    for job in jobs:
+        out_dir = Path(job["output_dir"])
+        if not out_dir.exists():
+            skipped_jobs += 1
+            continue
+
+        job_freed = 0
+        for f in out_dir.iterdir():
+            if not f.is_file():
+                continue
+            if f.suffix.lower() in _KEEP_EXTENSIONS:
+                continue  # keep metadata
+            try:
+                size = f.stat().st_size
+                if not dry_run:
+                    f.unlink()
+                job_freed    += size
+                total_freed  += size
+                logger.debug("Cleanup%s: %s (%.1f MB)", " [dry]" if dry_run else "", f.name, size / 1024 / 1024)
+            except Exception as exc:
+                logger.warning("Could not delete %s: %s", f, exc)
+                errors += 1
+
+        if job_freed > 0:
+            cleaned_jobs += 1
+            logger.info(
+                "Cleaned job %s (%s — %s): freed %.1f MB%s",
+                job["id"], job["niche"], job["main_subject"][:40],
+                job_freed / 1024 / 1024,
+                " [dry run]" if dry_run else "",
+            )
+
+    freed_mb = total_freed / (1024 * 1024)
+    freed_gb = total_freed / (1024 ** 3)
+
+    return {
+        "dry_run":     dry_run,
+        "jobs_found":  len(jobs),
+        "cleaned":     cleaned_jobs,
+        "skipped":     skipped_jobs,
+        "errors":      errors,
+        "freed_bytes": total_freed,
+        "freed_mb":    round(freed_mb, 1),
+    }
+
+
+def cleanup_and_notify(older_than_days: int = 30, dry_run: bool = False) -> dict:
+    """Run cleanup and send Telegram summary."""
+    logger.info("Starting cleanup (older_than_days=%d, dry_run=%s)", older_than_days, dry_run)
+    result = run_cleanup(older_than_days=older_than_days, dry_run=dry_run)
+
+    if "error" in result:
+        send_message(f"❌ <b>Cleanup falhou</b>\n<code>{result['error']}</code>")
+        return result
+
+    freed_mb = result["freed_mb"]
+    freed_gb = freed_mb / 1024
+
+    size_str = f"{freed_gb:.2f} GB" if freed_gb >= 1 else f"{freed_mb:.1f} MB"
+    dry_tag  = " <i>(dry run)</i>" if dry_run else ""
+
+    if result["cleaned"] == 0:
+        send_message(
+            f"🧹 <b>Cleanup concluído{dry_tag}</b>\n"
+            f"Nenhum arquivo para remover (critério: &gt; {older_than_days} dias)."
+        )
+    else:
+        send_message(
+            f"🧹 <b>Cleanup concluído{dry_tag}</b>\n\n"
+            f"📁 Jobs processados : {result['jobs_found']}\n"
+            f"✅ Jobs limpos       : {result['cleaned']}\n"
+            f"💾 Espaço liberado  : <b>{size_str}</b>\n"
+            f"⚠️ Erros            : {result['errors']}\n\n"
+            f"Arquivos preservados: .json, .txt, .srt"
+        )
+
+    return result
