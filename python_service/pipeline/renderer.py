@@ -67,9 +67,11 @@ def _build_background_from_videos(
     output_path: Path,
 ) -> Path:
     """
-    Concatenate video files (looping if needed) to fill total_duration.
-    Scales and crops each clip to 1080x1920.
-    Returns output_path.
+    Build a video background that fills exactly total_duration seconds.
+
+    Single clip  → -stream_loop -1 loops it indefinitely then cuts at -t.
+    Multiple clips → concat list repeated until > total_duration, then cuts at -t.
+    Both approaches guarantee no freeze at the end.
     """
     scale_filter = (
         f"scale={W}:{H}:force_original_aspect_ratio=increase,"
@@ -78,19 +80,34 @@ def _build_background_from_videos(
         f"fps={FPS}"
     )
 
-    # Build a list file for concat demuxer
+    if len(asset_paths) == 1:
+        # Simplest and most reliable: loop a single clip indefinitely, cut at -t
+        cmd = [
+            "ffmpeg", "-y",
+            "-stream_loop", "-1",
+            "-i", str(asset_paths[0]),
+            "-vf", scale_filter,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-an",
+            "-t", str(total_duration),
+            str(output_path),
+        ]
+        _run(cmd, "build background (loop single video)")
+        return output_path
+
+    # Multiple clips: build concat list, repeat until well past total_duration
     list_file = output_path.parent / "concat_list.txt"
     written_duration = 0.0
     lines: list[str] = []
 
-    while written_duration < total_duration:
+    while written_duration < total_duration + 10:   # +10s safety margin
         for ap in asset_paths:
             dur = _ffprobe_duration(ap)
             if dur <= 0:
                 dur = 5.0
             lines.append(f"file '{ap}'\n")
             written_duration += dur
-            if written_duration >= total_duration:
+            if written_duration >= total_duration + 10:
                 break
 
     list_file.write_text("".join(lines), encoding="utf-8")
@@ -104,7 +121,7 @@ def _build_background_from_videos(
         "-t", str(total_duration),
         str(output_path),
     ]
-    _run(cmd, "build background (video)")
+    _run(cmd, "build background (concat videos)")
     return output_path
 
 
