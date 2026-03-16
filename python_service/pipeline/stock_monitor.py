@@ -350,6 +350,141 @@ def run_cleanup(older_than_days: int = 30, dry_run: bool = False) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# B-roll _used/ purge
+# ─────────────────────────────────────────────────────────────────────────────
+
+def purge_used_broll(dry_run: bool = False) -> dict:
+    """
+    Scan every _used/ subfolder inside BROLL_ROOT and:
+      - DELETE  the file if its original path exists in the assets DB table
+               (confirmed used in at least one finished job)
+      - RESTORE the file to its parent folder if NOT found in the DB
+               (moved by mistake or the job was never completed)
+
+    The DB stores the ORIGINAL path (before the file was moved to _used/),
+    so we reconstruct it as:  <profile_dir>/<filename>
+
+    Args:
+        dry_run: If True, only logs what would happen — no files are touched.
+
+    Returns:
+        Summary dict with counts of deleted / restored / errors.
+    """
+    from utils.db import get_conn
+
+    deleted   = 0
+    restored  = 0
+    errors    = 0
+    deleted_bytes = 0
+
+    if not BROLL_ROOT.exists():
+        return {"deleted": 0, "restored": 0, "errors": 0, "freed_bytes": 0}
+
+    for profile_dir in BROLL_ROOT.iterdir():
+        if not profile_dir.is_dir() or profile_dir.name.startswith("_"):
+            continue
+
+        used_dir = profile_dir / "_used"
+        if not used_dir.exists():
+            continue
+
+        files = [
+            p for p in used_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in (VIDEO_EXTS | IMAGE_EXTS)
+        ]
+
+        for f in files:
+            # Reconstruct the original path (before move to _used/)
+            original_path = str(profile_dir / f.name)
+
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT COUNT(*) FROM assets WHERE file_path = %s",
+                            (original_path,),
+                        )
+                        count = cur.fetchone()[0]
+            except Exception as exc:
+                logger.warning("DB check failed for '%s': %s", f.name, exc)
+                errors += 1
+                continue
+
+            if count > 0:
+                # Confirmed used in DB → delete
+                size = f.stat().st_size
+                logger.info(
+                    "Purge%s: DELETE '%s' (used %d time(s) in DB)",
+                    " [dry]" if dry_run else "", f.name, count,
+                )
+                if not dry_run:
+                    try:
+                        f.unlink()
+                        deleted += 1
+                        deleted_bytes += size
+                    except Exception as exc:
+                        logger.warning("Could not delete '%s': %s", f, exc)
+                        errors += 1
+                else:
+                    deleted += 1
+                    deleted_bytes += size
+            else:
+                # NOT in DB → restore to active pool
+                dest = profile_dir / f.name
+                if dest.exists():
+                    dest = profile_dir / f"{f.stem}_restored{f.suffix}"
+                logger.info(
+                    "Purge%s: RESTORE '%s' → '%s' (not found in DB)",
+                    " [dry]" if dry_run else "", f.name, dest.name,
+                )
+                if not dry_run:
+                    try:
+                        f.rename(dest)
+                        restored += 1
+                    except Exception as exc:
+                        logger.warning("Could not restore '%s': %s", f, exc)
+                        errors += 1
+                else:
+                    restored += 1
+
+    return {
+        "dry_run":     dry_run,
+        "deleted":     deleted,
+        "restored":    restored,
+        "errors":      errors,
+        "freed_bytes": deleted_bytes,
+        "freed_mb":    round(deleted_bytes / (1024 * 1024), 1),
+    }
+
+
+def purge_used_broll_and_notify(dry_run: bool = False) -> dict:
+    """Run purge_used_broll and send Telegram summary."""
+    logger.info("Starting b-roll _used/ purge (dry_run=%s)", dry_run)
+    result = purge_used_broll(dry_run=dry_run)
+
+    dry_tag  = " <i>(dry run)</i>" if dry_run else ""
+    freed_mb = result["freed_mb"]
+    size_str = f"{freed_mb / 1024:.2f} GB" if freed_mb >= 1024 else f"{freed_mb:.1f} MB"
+
+    if result["deleted"] == 0 and result["restored"] == 0:
+        send_message(
+            f"🗑️ <b>Expurgo b-roll{dry_tag}</b>\n"
+            f"Nenhum arquivo na pasta <code>_used/</code> para processar."
+        )
+    else:
+        lines = [f"🗑️ <b>Expurgo b-roll concluído{dry_tag}</b>\n"]
+        if result["deleted"]:
+            lines.append(f"✅ Deletados (confirmados no DB) : <b>{result['deleted']}</b> ({size_str})")
+        if result["restored"]:
+            lines.append(f"♻️ Restaurados (não estavam no DB): <b>{result['restored']}</b>")
+        if result["errors"]:
+            lines.append(f"⚠️ Erros : {result['errors']}")
+        send_message("\n".join(lines))
+
+    return result
+
+
 def cleanup_and_notify(older_than_days: int = 30, dry_run: bool = False) -> dict:
     """Run cleanup and send Telegram summary."""
     logger.info("Starting cleanup (older_than_days=%d, dry_run=%s)", older_than_days, dry_run)

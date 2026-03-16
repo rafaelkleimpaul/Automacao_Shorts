@@ -493,6 +493,19 @@ def cleanup_endpoint(older_than_days: int = 30, dry_run: bool = False) -> dict[s
     return cleanup_and_notify(older_than_days=older_than_days, dry_run=dry_run)
 
 
+@app.post("/purge_used_broll", tags=["ops"])
+def purge_used_broll_endpoint(dry_run: bool = False) -> dict[str, Any]:
+    """
+    Scan every _used/ subfolder inside /data/assets/broll/ and:
+      - DELETE files confirmed in the assets DB table (truly used)
+      - RESTORE files NOT found in DB back to the active pool
+
+    Use dry_run=true first to preview without touching files.
+    """
+    from pipeline.stock_monitor import purge_used_broll_and_notify
+    return purge_used_broll_and_notify(dry_run=dry_run)
+
+
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "shorts-video-worker", "docs": "/docs"}
