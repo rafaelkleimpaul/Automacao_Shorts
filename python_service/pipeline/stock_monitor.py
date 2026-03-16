@@ -458,6 +458,191 @@ def purge_used_broll(dry_run: bool = False) -> dict:
     }
 
 
+def request_purge_approval(base_url: str) -> dict:
+    """
+    Run a detailed dry-run, build a full report and send it to Telegram with
+    Approve / Cancel inline keyboard buttons.
+
+    The approve button calls  POST <base_url>/purge_used_broll/confirm?token=<token>
+    The cancel  button calls  POST <base_url>/purge_used_broll/cancel?token=<token>
+
+    Args:
+        base_url: Public base URL of this FastAPI service (e.g. http://1.2.3.4:8000).
+                  Used to generate the inline-keyboard button URLs.
+
+    Returns:
+        The dry-run summary dict plus the generated approval token.
+    """
+    import uuid
+    from datetime import datetime, timezone, timedelta
+    from utils.telegram import send_message_with_buttons
+    from utils.db import get_conn
+
+    # ── Collect detailed file info ────────────────────────────────────────────
+    to_delete:  list[dict] = []   # {profile, name, size_mb, used_count}
+    to_restore: list[dict] = []   # {profile, name}
+
+    if BROLL_ROOT.exists():
+        for profile_dir in sorted(BROLL_ROOT.iterdir()):
+            if not profile_dir.is_dir() or profile_dir.name.startswith("_"):
+                continue
+            used_dir = profile_dir / "_used"
+            if not used_dir.exists():
+                continue
+
+            for f in sorted(used_dir.iterdir()):
+                if not f.is_file() or f.suffix.lower() not in (VIDEO_EXTS | IMAGE_EXTS):
+                    continue
+                original_path = str(profile_dir / f.name)
+                try:
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT COUNT(*) FROM assets WHERE file_path = %s",
+                                (original_path,),
+                            )
+                            count = cur.fetchone()[0]
+                except Exception as exc:
+                    logger.warning("DB check failed for '%s': %s", f.name, exc)
+                    continue
+
+                size_mb = round(f.stat().st_size / (1024 * 1024), 1)
+                if count > 0:
+                    to_delete.append({"profile": profile_dir.name, "name": f.name, "size_mb": size_mb, "used_count": count})
+                else:
+                    to_restore.append({"profile": profile_dir.name, "name": f.name, "size_mb": size_mb})
+
+    # ── Generate approval token ───────────────────────────────────────────────
+    token     = uuid.uuid4().hex
+    expires   = datetime.now(timezone.utc) + timedelta(hours=2)
+    _PENDING_APPROVALS[token] = {
+        "expires_at": expires,
+        "to_delete":  to_delete,
+        "to_restore": to_restore,
+    }
+
+    # ── Build Telegram message ────────────────────────────────────────────────
+    total_delete_mb = sum(f["size_mb"] for f in to_delete)
+    size_str = f"{total_delete_mb / 1024:.2f} GB" if total_delete_mb >= 1024 else f"{total_delete_mb:.1f} MB"
+    now_str  = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+
+    lines = [
+        "🗑️ <b>Solicitação de Expurgo de B-Roll</b>",
+        f"📅 {now_str}  |  ⏱ Expira em 2h\n",
+    ]
+
+    if to_delete:
+        lines.append(f"✅ <b>Para DELETAR ({len(to_delete)} arquivo(s) — {size_str}):</b>")
+        for item in to_delete:
+            lines.append(f"  [{item['profile']}] {item['name']} ({item['size_mb']} MB, usado {item['used_count']}×)")
+    else:
+        lines.append("✅ Nenhum arquivo confirmado para deleção.")
+
+    lines.append("")
+
+    if to_restore:
+        lines.append(f"♻️ <b>Para RESTAURAR ao pool ativo ({len(to_restore)} arquivo(s)):</b>")
+        for item in to_restore:
+            lines.append(f"  [{item['profile']}] {item['name']} ({item['size_mb']} MB)")
+    else:
+        lines.append("♻️ Nenhum arquivo para restaurar.")
+
+    lines.append("\n<i>Escolha uma ação abaixo:</i>")
+
+    base_url = base_url.rstrip("/")
+    buttons = [[
+        {"text": "✅ Aprovar e executar", "url": f"{base_url}/purge_used_broll/confirm?token={token}"},
+        {"text": "❌ Cancelar",           "url": f"{base_url}/purge_used_broll/cancel?token={token}"},
+    ]]
+
+    send_message_with_buttons("\n".join(lines), buttons)
+    logger.info(
+        "Purge approval request sent (token=%s, delete=%d, restore=%d, expires=%s)",
+        token, len(to_delete), len(to_restore), expires.isoformat(),
+    )
+
+    return {
+        "token":           token,
+        "expires_at":      expires.isoformat(),
+        "files_to_delete": len(to_delete),
+        "files_to_restore": len(to_restore),
+        "total_mb":        round(total_delete_mb, 1),
+    }
+
+
+# In-memory pending approvals: {token: {expires_at, to_delete, to_restore}}
+_PENDING_APPROVALS: dict[str, dict] = {}
+
+
+def confirm_purge(token: str) -> dict:
+    """
+    Execute the purge that was previewed and approved via Telegram button.
+    Validates that the token exists and has not expired.
+    """
+    from datetime import datetime, timezone
+    from utils.db import get_conn
+
+    pending = _PENDING_APPROVALS.pop(token, None)
+    if not pending:
+        return {"error": "Token inválido ou já utilizado."}
+    if datetime.now(timezone.utc) > pending["expires_at"]:
+        return {"error": "Token expirado. Gere um novo pedido."}
+
+    deleted       = 0
+    restored      = 0
+    errors        = 0
+    deleted_bytes = 0
+
+    for item in pending["to_delete"]:
+        f = BROLL_ROOT / item["profile"] / "_used" / item["name"]
+        try:
+            size = f.stat().st_size
+            f.unlink()
+            deleted       += 1
+            deleted_bytes += size
+            logger.info("Purge confirmed: deleted '%s'", f)
+        except Exception as exc:
+            logger.warning("Could not delete '%s': %s", f, exc)
+            errors += 1
+
+    for item in pending["to_restore"]:
+        src  = BROLL_ROOT / item["profile"] / "_used" / item["name"]
+        dest = BROLL_ROOT / item["profile"] / item["name"]
+        if dest.exists():
+            dest = BROLL_ROOT / item["profile"] / f"{src.stem}_restored{src.suffix}"
+        try:
+            src.rename(dest)
+            restored += 1
+            logger.info("Purge confirmed: restored '%s' → '%s'", src.name, dest.name)
+        except Exception as exc:
+            logger.warning("Could not restore '%s': %s", src, exc)
+            errors += 1
+
+    freed_mb = round(deleted_bytes / (1024 * 1024), 1)
+    size_str = f"{freed_mb / 1024:.2f} GB" if freed_mb >= 1024 else f"{freed_mb:.1f} MB"
+
+    lines = ["✅ <b>Expurgo executado com sucesso!</b>\n"]
+    if deleted:
+        lines.append(f"🗑️ Deletados : <b>{deleted}</b> ({size_str})")
+    if restored:
+        lines.append(f"♻️ Restaurados: <b>{restored}</b>")
+    if errors:
+        lines.append(f"⚠️ Erros     : {errors}")
+
+    send_message("\n".join(lines))
+
+    return {"deleted": deleted, "restored": restored, "errors": errors, "freed_mb": freed_mb}
+
+
+def cancel_purge(token: str) -> dict:
+    """Cancel a pending purge approval."""
+    removed = _PENDING_APPROVALS.pop(token, None)
+    if removed:
+        send_message("❌ <b>Expurgo cancelado.</b>\nNenhum arquivo foi alterado.")
+        return {"status": "cancelled"}
+    return {"status": "token_not_found"}
+
+
 def purge_used_broll_and_notify(dry_run: bool = False) -> dict:
     """Run purge_used_broll and send Telegram summary."""
     logger.info("Starting b-roll _used/ purge (dry_run=%s)", dry_run)

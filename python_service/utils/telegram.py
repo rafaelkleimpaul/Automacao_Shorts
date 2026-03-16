@@ -39,3 +39,39 @@ def send_message(text: str) -> None:
         logger.debug("Telegram message sent (%d chars)", len(text))
     except Exception as exc:
         logger.warning("Telegram notification failed: %s", exc)
+
+
+def send_message_with_buttons(text: str, buttons: list[list[dict]]) -> None:
+    """
+    Send an HTML message with an inline keyboard.
+
+    Args:
+        text: HTML-formatted message body.
+        buttons: List of rows, each row is a list of button dicts.
+                 Each button must have 'text' and either 'url' or 'callback_data'.
+
+    Example:
+        buttons = [[
+            {"text": "✅ Aprovar", "url": "https://..."},
+            {"text": "❌ Cancelar", "url": "https://..."},
+        ]]
+    """
+    if not _is_configured():
+        logger.debug("Telegram not configured — skipping notification")
+        return
+    url = f"https://api.telegram.org/bot{_TOKEN}/sendMessage"
+    try:
+        resp = httpx.post(
+            url,
+            json={
+                "chat_id":    _CHAT_ID,
+                "text":       text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": buttons},
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        logger.debug("Telegram message with buttons sent (%d chars)", len(text))
+    except Exception as exc:
+        logger.warning("Telegram notification with buttons failed: %s", exc)
