@@ -98,7 +98,7 @@ The "scenes" array MUST contain EXACTLY 3 items (three separate scene objects):
 STRICT RULES — follow exactly:
 - "scenes" must be a JSON array with AT LEAST 3 objects inside square brackets [ ]
 - voiceover must be approx {duration_target * 2.5:.0f} words (±25%)
-- 5 to 20 hashtags relevant to {niche}
+- 5 to 20 hashtags relevant to {niche} — each must be a SINGLE word starting with # and containing NO spaces (e.g. #MoneyTips not #money tips)
 - keywords should map to generic stock visuals (e.g., "money", "charts", "coins", "hands counting money")
 - disclaimer must contain the word "educational"
 - respond with ONLY the JSON object — no markdown, no code blocks, no extra text
