@@ -10,9 +10,9 @@ services:
     container_name: shorts_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+      POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER must be set in .env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}"
+      POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB must be set in .env}"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro       # auto-run on first start
@@ -52,7 +52,7 @@ services:
       N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
       WEBHOOK_URL: ${WEBHOOK_URL:-https://n8n.rafaelkleimpaul.com.br/}
       N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-https://n8n.rafaelkleimpaul.com.br/}
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set in .env (min 32 chars)}
+      N8N_ENCRYPTION_KEY: "${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set in .env}"
       GENERIC_TIMEZONE: ${TIMEZONE:-America/New_York}
       N8N_BLOCK_ENV_ACCESS: ${N8N_BLOCK_ENV_ACCESS:-false}
       NODE_ENV: ${NODE_ENV:-production} # production | development | test
@@ -149,7 +149,7 @@ services:
       TELEGRAM_CHAT_ID:     ${TELEGRAM_CHAT_ID:-}
 
       # Security
-      API_KEY: ${API_KEY:?API_KEY must be set in .env (generate with: openssl rand -hex 32)}
+      API_KEY: "${API_KEY:?API_KEY must be set in .env}"
 
       # Worker settings
       PYTHONUNBUFFERED: 1
