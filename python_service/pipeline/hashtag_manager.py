@@ -159,11 +159,26 @@ def _score_tags(videos: list[dict]) -> list[dict]:
 
         seen_in_video: set[str] = set()
         for raw in raw_tags:
+            # Skip multi-word tags from the tags[] field (e.g. "Finance with Sharan")
+            # Only single-word tags are valid hashtags
+            if " " in raw.strip() and not raw.strip().startswith("#"):
+                continue
+
             tag = raw if raw.startswith("#") else f"#{raw}"
             key = tag.lower()
 
-            # Skip overly generic or very short tags
-            if len(tag) < 4 or key in {"#fy", "#fyp", "#foryou", "#shorts", "#reels", "#viral"}:
+            # Must match valid hashtag format: #Word (letters/numbers/underscore only, no spaces)
+            if not re.match(r"^#[A-Za-z][A-Za-z0-9_]{2,}$", tag):
+                continue
+
+            # Skip overly generic, unrelated, or engagement-bait tags
+            _SKIP_TAGS = {
+                "#fy", "#fyp", "#foryou", "#shorts", "#reels", "#viral",
+                "#trending", "#funny", "#comedy", "#memes", "#fun",
+                "#like", "#follow", "#subscribe", "#share", "#video",
+                "#youtube", "#tiktok", "#instagram", "#reel",
+            }
+            if key in _SKIP_TAGS:
                 continue
 
             if key not in seen_in_video:
