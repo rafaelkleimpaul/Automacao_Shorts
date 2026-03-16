@@ -16,12 +16,17 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
+import threading
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Security
 from fastapi.responses import FileResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from utils.db import create_job, get_conn, get_job, init_pool, update_job_status
@@ -32,6 +37,50 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security: API Key
+# ─────────────────────────────────────────────────────────────────────────────
+
+_API_KEY        = os.environ.get("API_KEY", "")
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def verify_api_key(key: str | None = Security(_api_key_header)) -> None:
+    """Dependency: enforces X-API-Key header when API_KEY env var is set."""
+    if not _API_KEY:
+        logger.warning("API_KEY not configured — running without authentication")
+        return
+    if not key or not secrets.compare_digest(key, _API_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security: Rate limiter (in-memory, per IP)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_rate_lock:  threading.Lock              = threading.Lock()
+_rate_store: dict[str, list[float]]      = defaultdict(list)
+
+
+def _make_rate_limiter(max_calls: int = 10, window_seconds: int = 60):
+    """Returns a FastAPI dependency that limits requests per IP."""
+    def _limit(request: Request) -> None:
+        ip  = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        with _rate_lock:
+            recent = [t for t in _rate_store[ip] if now - t < window_seconds]
+            recent.append(now)
+            _rate_store[ip] = recent
+            count = len(recent)
+        if count > max_calls:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+    return _limit
+
+
+# Standard limiters
+_admin_rate_limit    = _make_rate_limiter(max_calls=10, window_seconds=60)
+_pipeline_rate_limit = _make_rate_limiter(max_calls=30, window_seconds=60)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,7 +125,7 @@ def _run_pipeline_task(job_id: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
-def health() -> dict[str, Any]:
+def health(request: Request, _: None = Depends(verify_api_key)) -> dict[str, Any]:
     """Liveness + basic DB probe + publishing platform status."""
     try:
         with get_conn() as conn:
@@ -119,7 +168,7 @@ class GenerateJobsRequest(BaseModel):
 
 
 @app.post("/jobs", tags=["pipeline"])
-def create_job_endpoint(body: JobCreateRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+def create_job_endpoint(body: JobCreateRequest, background_tasks: BackgroundTasks, request: Request, _auth: None = Depends(verify_api_key), _rate: None = Depends(_pipeline_rate_limit)) -> dict[str, Any]:
     """
     Create a single job and optionally start the pipeline immediately.
     Useful for manual scheduling or external integrations.
@@ -146,7 +195,7 @@ def create_job_endpoint(body: JobCreateRequest, background_tasks: BackgroundTask
 
 
 @app.post("/generate_jobs", tags=["pipeline"])
-def generate_jobs_endpoint(body: GenerateJobsRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+def generate_jobs_endpoint(body: GenerateJobsRequest, background_tasks: BackgroundTasks, request: Request, _auth: None = Depends(verify_api_key), _rate: None = Depends(_pipeline_rate_limit)) -> dict[str, Any]:
     """
     Fetch trending news for the given niche, use the local LLM to generate
     video topic ideas, create a job for each, and optionally dispatch them.
@@ -167,7 +216,7 @@ def generate_jobs_endpoint(body: GenerateJobsRequest, background_tasks: Backgrou
         topics = generate_topics(niche=body.niche, count=body.count)
     except Exception as exc:
         logger.error("Topic generation failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Topic generation failed: {exc}")
+        raise HTTPException(status_code=502, detail="Topic generation failed. Check worker logs for details.")
 
     job_ids: list[str] = []
     for topic_params in topics:
@@ -190,14 +239,14 @@ def generate_jobs_endpoint(body: GenerateJobsRequest, background_tasks: Backgrou
 
 
 @app.get("/niches", tags=["pipeline"])
-def list_niches() -> dict[str, Any]:
+def list_niches(_: None = Depends(verify_api_key)) -> dict[str, Any]:
     """List available niche configurations for topic generation."""
     from pipeline.topic_generator import list_available_niches
     return {"niches": list_available_niches()}
 
 
 @app.post("/run/{job_id}", tags=["pipeline"])
-def run_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+def run_job(job_id: str, background_tasks: BackgroundTasks, request: Request, _auth: None = Depends(verify_api_key), _rate: None = Depends(_pipeline_rate_limit)) -> dict[str, Any]:
     """
     Trigger pipeline execution for a job.
     Returns immediately with status=accepted; pipeline runs in background.
@@ -219,8 +268,7 @@ def run_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
     if current_status not in RUNNABLE_STATUSES:
         raise HTTPException(
             status_code=409,
-            detail=f"Job status={current_status} is not runnable. "
-                   f"Reset to PENDING via SQL to retry.",
+            detail="Job is not in a runnable state.",
         )
 
     if current_status == "PENDING":
@@ -236,7 +284,7 @@ def run_job(job_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
 
 
 @app.get("/job/{job_id}", tags=["pipeline"])
-def get_job_status(job_id: str) -> dict[str, Any]:
+def get_job_status(job_id: str, _: None = Depends(verify_api_key)) -> dict[str, Any]:
     """Return current status, output paths, and publish results for a job."""
     job = get_job(job_id)
     if not job:
@@ -276,7 +324,7 @@ def get_job_status(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/jobs", tags=["pipeline"])
-def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
+def list_jobs(limit: int = 50, _: None = Depends(verify_api_key)) -> list[dict[str, Any]]:
     """List the most recent jobs with their publish status."""
     import psycopg2.extras
     with get_conn() as conn:
@@ -306,17 +354,22 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
 
 
 @app.get("/serve/{job_id}/{filename}", tags=["ops"])
-def serve_file(job_id: str, filename: str) -> FileResponse:
+def serve_file(job_id: str, filename: str, _: None = Depends(verify_api_key)) -> FileResponse:
     """
     Serve a generated file for external access (required for Instagram uploads).
     The PUBLIC_BASE_URL env var should point to the public URL of this worker.
 
     Example: GET /serve/abc-123/final.mp4
     """
-    # Security: only allow safe characters in filename
+    # Only allow safe filename characters (no path separators or traversal)
     import re
     if not re.match(r"^[\w\-. ]+$", filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Restrict to allowed media/output extensions only
+    _SERVE_ALLOWED_EXTS = {".mp4", ".mov", ".jpg", ".jpeg", ".png", ".srt", ".txt", ".json"}
+    if Path(filename).suffix.lower() not in _SERVE_ALLOWED_EXTS:
+        raise HTTPException(status_code=403, detail="File type not allowed")
 
     job = get_job(job_id)
     if not job:
@@ -324,23 +377,36 @@ def serve_file(job_id: str, filename: str) -> FileResponse:
 
     output_dir = job.get("output_dir")
     if not output_dir:
-        raise HTTPException(status_code=404, detail="Job output directory not set")
+        raise HTTPException(status_code=404, detail="Job output not available")
 
     file_path = Path(output_dir) / filename
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+        raise HTTPException(status_code=404, detail="File not found")
 
-    # Only serve files within the data directory (path traversal guard)
+    resolved      = file_path.resolve()
+    data_resolved = DATA_ROOT.resolve()
+    creds_resolved = (DATA_ROOT / "credentials").resolve()
+
+    # Must be inside DATA_ROOT
     try:
-        file_path.resolve().relative_to(DATA_ROOT.resolve())
+        resolved.relative_to(data_resolved)
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Must NOT be inside credentials/
+    try:
+        resolved.relative_to(creds_resolved)
+        raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except ValueError:
+        pass  # good — not in credentials/
 
     return FileResponse(str(file_path))
 
 
 @app.get("/publish_results", tags=["publishing"])
-def list_publish_results(limit: int = 50) -> list[dict[str, Any]]:
+def list_publish_results(limit: int = 50, _: None = Depends(verify_api_key)) -> list[dict[str, Any]]:
     """List recent publishing results across all platforms and jobs."""
     import psycopg2.extras
     with get_conn() as conn:
@@ -368,6 +434,7 @@ def list_publish_logs(
     job_id:   str | None = None,
     level:    str | None = None,
     limit:    int = 100,
+    _: None = Depends(verify_api_key),
 ) -> list[dict[str, Any]]:
     """
     List publish_logs entries with optional filters.
@@ -414,7 +481,7 @@ def list_publish_logs(
 
 
 @app.post("/daily_report", tags=["ops"])
-def daily_report_endpoint() -> dict[str, Any]:
+def daily_report_endpoint(request: Request, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """
     Send full daily report via Telegram: asset stock + server health + stuck jobs.
     Call from n8n Schedule Trigger every morning before videos start.
@@ -429,7 +496,7 @@ def daily_report_endpoint() -> dict[str, Any]:
 
 
 @app.post("/stock_report", tags=["ops"])
-def stock_report_endpoint() -> dict[str, Any]:
+def stock_report_endpoint(request: Request, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """Send asset stock report via Telegram (kept for backwards compatibility)."""
     from pipeline.stock_monitor import build_stock_report, send_daily_report
     send_daily_report()
@@ -437,7 +504,7 @@ def stock_report_endpoint() -> dict[str, Any]:
 
 
 @app.post("/weekly_report", tags=["ops"])
-def weekly_report_endpoint(days: int = 7) -> dict[str, Any]:
+def weekly_report_endpoint(days: int = 7, request: Request = None, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """
     Fetch YouTube video stats for the last `days` days and send a
     performance report via Telegram.
@@ -449,7 +516,7 @@ def weekly_report_endpoint(days: int = 7) -> dict[str, Any]:
 
 
 @app.post("/refresh_hashtags", tags=["ops"])
-def refresh_hashtags_endpoint(niche: str | None = None) -> dict[str, Any]:
+def refresh_hashtags_endpoint(niche: str | None = None, request: Request = None, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """
     Discover trending hashtags for all niches (or a specific one) by analysing
     top-performing YouTube Shorts. Results are cached and automatically used
@@ -468,7 +535,7 @@ def refresh_hashtags_endpoint(niche: str | None = None) -> dict[str, Any]:
 
 
 @app.get("/hashtags/{niche}", tags=["ops"])
-def get_hashtags(niche: str) -> dict[str, Any]:
+def get_hashtags(niche: str, _: None = Depends(verify_api_key)) -> dict[str, Any]:
     """Return the current cached hashtags for a niche."""
     from pipeline.hashtag_manager import load_cached_hashtags, _cache_path
     import json
@@ -480,7 +547,7 @@ def get_hashtags(niche: str) -> dict[str, Any]:
 
 
 @app.post("/cleanup", tags=["ops"])
-def cleanup_endpoint(older_than_days: int = 30, dry_run: bool = False) -> dict[str, Any]:
+def cleanup_endpoint(older_than_days: int = 30, dry_run: bool = False, request: Request = None, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """
     Delete heavy media files (mp4, wav, aac) from jobs older than `older_than_days`
     days in a terminal status. Metadata files (.json, .txt, .srt) are kept.
@@ -494,7 +561,7 @@ def cleanup_endpoint(older_than_days: int = 30, dry_run: bool = False) -> dict[s
 
 
 @app.post("/purge_used_broll/request", tags=["ops"])
-def purge_request_endpoint(request: Request) -> dict[str, Any]:
+def purge_request_endpoint(request: Request, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """
     Run a dry-run of the b-roll purge and send a Telegram message with all details
     (files to delete, files to restore, sizes) plus Approve / Cancel buttons.
@@ -530,7 +597,7 @@ def purge_cancel_endpoint(token: str) -> dict[str, Any]:
 
 
 @app.post("/purge_used_broll", tags=["ops"])
-def purge_used_broll_endpoint(dry_run: bool = False) -> dict[str, Any]:
+def purge_used_broll_endpoint(dry_run: bool = False, request: Request = None, _auth: None = Depends(verify_api_key), _rate: None = Depends(_admin_rate_limit)) -> dict[str, Any]:
     """
     Scan every _used/ subfolder inside /data/assets/broll/ and:
       - DELETE files confirmed in the assets DB table (truly used)

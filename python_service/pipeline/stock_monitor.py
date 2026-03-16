@@ -9,9 +9,11 @@ Asset stock monitor + server health checks.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -515,13 +517,14 @@ def request_purge_approval(base_url: str) -> dict:
     # ── Generate approval token ───────────────────────────────────────────────
     token     = uuid.uuid4().hex
     expires   = datetime.now(timezone.utc) + timedelta(hours=2)
-    approvals = _load_approvals()
-    approvals[token] = {
-        "expires_at": expires,
-        "to_delete":  to_delete,
-        "to_restore": to_restore,
-    }
-    _save_approvals(approvals)
+    with _APPROVALS_LOCK:
+        approvals = _load_approvals()
+        approvals[_hash_token(token)] = {
+            "expires_at": expires,
+            "to_delete":  to_delete,
+            "to_restore": to_restore,
+        }
+        _save_approvals(approvals)
 
     # ── Build Telegram message ────────────────────────────────────────────────
     total_delete_mb = sum(f["size_mb"] for f in to_delete)
@@ -579,7 +582,13 @@ def request_purge_approval(base_url: str) -> dict:
 
 
 # Pending approvals persisted to disk so tokens survive container restarts
-_APPROVALS_FILE = DATA_ROOT / "purge_approvals.json"
+_APPROVALS_FILE  = DATA_ROOT / "purge_approvals.json"
+_APPROVALS_LOCK  = threading.Lock()
+
+
+def _hash_token(token: str) -> str:
+    """One-way hash of the raw token for safe storage on disk."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _load_approvals() -> dict:
@@ -619,22 +628,36 @@ def confirm_purge(token: str) -> dict:
     from datetime import datetime, timezone
     from utils.db import get_conn
 
-    approvals = _load_approvals()
-    pending = approvals.pop(token, None)
-    if not pending:
-        return {"error": "Token inválido ou já utilizado."}
-    if datetime.now(timezone.utc) > pending["expires_at"]:
+    with _APPROVALS_LOCK:
+        approvals = _load_approvals()
+        hashed  = _hash_token(token)
+        pending = approvals.pop(hashed, None)
+        if not pending:
+            return {"error": "Token inválido ou já utilizado."}
+        if datetime.now(timezone.utc) > pending["expires_at"]:
+            _save_approvals(approvals)
+            return {"error": "Token expirado. Gere um novo pedido."}
+        # Save immediately (token consumed) before executing to prevent reuse
         _save_approvals(approvals)
-        return {"error": "Token expirado. Gere um novo pedido."}
-    _save_approvals(approvals)
 
     deleted       = 0
     restored      = 0
     errors        = 0
     deleted_bytes = 0
 
+    broll_resolved = BROLL_ROOT.resolve()
+
     for item in pending["to_delete"]:
-        f = BROLL_ROOT / item["profile"] / "_used" / item["name"]
+        # Sanitize: use only filename component to prevent path traversal
+        safe_profile = Path(item["profile"]).name
+        safe_name    = Path(item["name"]).name
+        f = BROLL_ROOT / safe_profile / "_used" / safe_name
+        try:
+            f.resolve().relative_to(broll_resolved)
+        except ValueError:
+            logger.warning("Path traversal blocked on delete: %s/%s", safe_profile, safe_name)
+            errors += 1
+            continue
         try:
             size = f.stat().st_size
             f.unlink()
@@ -646,10 +669,18 @@ def confirm_purge(token: str) -> dict:
             errors += 1
 
     for item in pending["to_restore"]:
-        src  = BROLL_ROOT / item["profile"] / "_used" / item["name"]
-        dest = BROLL_ROOT / item["profile"] / item["name"]
+        safe_profile = Path(item["profile"]).name
+        safe_name    = Path(item["name"]).name
+        src  = BROLL_ROOT / safe_profile / "_used" / safe_name
+        dest = BROLL_ROOT / safe_profile / safe_name
+        try:
+            src.resolve().relative_to(broll_resolved)
+        except ValueError:
+            logger.warning("Path traversal blocked on restore: %s/%s", safe_profile, safe_name)
+            errors += 1
+            continue
         if dest.exists():
-            dest = BROLL_ROOT / item["profile"] / f"{src.stem}_restored{src.suffix}"
+            dest = BROLL_ROOT / safe_profile / f"{src.stem}_restored{src.suffix}"
         try:
             src.rename(dest)
             restored += 1
@@ -676,10 +707,12 @@ def confirm_purge(token: str) -> dict:
 
 def cancel_purge(token: str) -> dict:
     """Cancel a pending purge approval."""
-    approvals = _load_approvals()
-    removed = approvals.pop(token, None)
+    with _APPROVALS_LOCK:
+        approvals = _load_approvals()
+        removed   = approvals.pop(_hash_token(token), None)
+        if removed:
+            _save_approvals(approvals)
     if removed:
-        _save_approvals(approvals)
         send_message("❌ <b>Expurgo cancelado.</b>\nNenhum arquivo foi alterado.")
         return {"status": "cancelled"}
     return {"status": "token_not_found"}
