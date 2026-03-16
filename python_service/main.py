@@ -354,7 +354,7 @@ def list_jobs(limit: int = 50, _: None = Depends(verify_api_key)) -> list[dict[s
 
 
 @app.get("/serve/{job_id}/{filename}", tags=["ops"])
-def serve_file(job_id: str, filename: str, _: None = Depends(verify_api_key)) -> FileResponse:
+def serve_file(job_id: str, filename: str) -> FileResponse:
     """
     Serve a generated file for external access (required for Instagram uploads).
     The PUBLIC_BASE_URL env var should point to the public URL of this worker.
