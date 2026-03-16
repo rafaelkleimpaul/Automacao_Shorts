@@ -175,12 +175,10 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: >
-      sh -c "docker events --filter 'container=shorts_worker' --filter 'event=start'
-             | while read event; do
-                 echo 'Worker started — reloading nginx...';
-                 docker exec nginx_proxy_manager nginx -s reload;
-               done"
+    command:
+      - sh
+      - -c
+      - "docker events --filter container=shorts_worker --filter event=start | while read e; do echo 'Worker started - reloading nginx'; docker exec nginx_proxy_manager nginx -s reload; done"
     depends_on:
       - video_worker
 
