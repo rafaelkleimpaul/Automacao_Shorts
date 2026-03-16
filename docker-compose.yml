@@ -103,7 +103,7 @@ services:
       tts:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: ${DATABASE_URL}
       DATA_ROOT: /data
       DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-en_US}
       DEFAULT_NICHE: ${DEFAULT_NICHE:-finance}
@@ -163,6 +163,26 @@ services:
       - "host.docker.internal:host-gateway"     # reach host services (Ollama etc.)
     networks:
       - shorts_net
+
+  # ─────────────────────────────────────────────
+  # Nginx Reloader
+  # Watches for video_worker restarts and reloads
+  # nginx_proxy_manager so it re-resolves the new IP.
+  # ─────────────────────────────────────────────
+  nginx_reloader:
+    image: docker:cli
+    container_name: shorts_nginx_reloader
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      sh -c "docker events --filter 'container=shorts_worker' --filter 'event=start'
+             | while read event; do
+                 echo 'Worker started — reloading nginx...';
+                 docker exec nginx_proxy_manager nginx -s reload;
+               done"
+    depends_on:
+      - video_worker
 
 networks:
   shorts_net:
