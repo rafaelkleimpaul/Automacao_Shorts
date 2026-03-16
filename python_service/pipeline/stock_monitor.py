@@ -515,11 +515,13 @@ def request_purge_approval(base_url: str) -> dict:
     # ── Generate approval token ───────────────────────────────────────────────
     token     = uuid.uuid4().hex
     expires   = datetime.now(timezone.utc) + timedelta(hours=2)
-    _PENDING_APPROVALS[token] = {
+    approvals = _load_approvals()
+    approvals[token] = {
         "expires_at": expires,
         "to_delete":  to_delete,
         "to_restore": to_restore,
     }
+    _save_approvals(approvals)
 
     # ── Build Telegram message ────────────────────────────────────────────────
     total_delete_mb = sum(f["size_mb"] for f in to_delete)
@@ -576,8 +578,37 @@ def request_purge_approval(base_url: str) -> dict:
     }
 
 
-# In-memory pending approvals: {token: {expires_at, to_delete, to_restore}}
-_PENDING_APPROVALS: dict[str, dict] = {}
+# Pending approvals persisted to disk so tokens survive container restarts
+_APPROVALS_FILE = DATA_ROOT / "purge_approvals.json"
+
+
+def _load_approvals() -> dict:
+    try:
+        if _APPROVALS_FILE.exists():
+            import json as _json
+            data = _json.loads(_APPROVALS_FILE.read_text())
+            # Convert expires_at strings back to datetime
+            for v in data.values():
+                if isinstance(v.get("expires_at"), str):
+                    v["expires_at"] = datetime.fromisoformat(v["expires_at"])
+            return data
+    except Exception as exc:
+        logger.warning("Could not load approvals file: %s", exc)
+    return {}
+
+
+def _save_approvals(approvals: dict) -> None:
+    try:
+        import json as _json
+        serialisable = {}
+        for k, v in approvals.items():
+            entry = dict(v)
+            if isinstance(entry.get("expires_at"), datetime):
+                entry["expires_at"] = entry["expires_at"].isoformat()
+            serialisable[k] = entry
+        _APPROVALS_FILE.write_text(_json.dumps(serialisable))
+    except Exception as exc:
+        logger.warning("Could not save approvals file: %s", exc)
 
 
 def confirm_purge(token: str) -> dict:
@@ -588,11 +619,14 @@ def confirm_purge(token: str) -> dict:
     from datetime import datetime, timezone
     from utils.db import get_conn
 
-    pending = _PENDING_APPROVALS.pop(token, None)
+    approvals = _load_approvals()
+    pending = approvals.pop(token, None)
     if not pending:
         return {"error": "Token inválido ou já utilizado."}
     if datetime.now(timezone.utc) > pending["expires_at"]:
+        _save_approvals(approvals)
         return {"error": "Token expirado. Gere um novo pedido."}
+    _save_approvals(approvals)
 
     deleted       = 0
     restored      = 0
@@ -642,8 +676,10 @@ def confirm_purge(token: str) -> dict:
 
 def cancel_purge(token: str) -> dict:
     """Cancel a pending purge approval."""
-    removed = _PENDING_APPROVALS.pop(token, None)
+    approvals = _load_approvals()
+    removed = approvals.pop(token, None)
     if removed:
+        _save_approvals(approvals)
         send_message("❌ <b>Expurgo cancelado.</b>\nNenhum arquivo foi alterado.")
         return {"status": "cancelled"}
     return {"status": "token_not_found"}
