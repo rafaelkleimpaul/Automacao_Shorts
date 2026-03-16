@@ -89,18 +89,26 @@ def boost(
     base     = NICHE_BASE_HASHTAGS.get(niche, [])
     trending = _load_trending(niche)
 
-    # Normalise: ensure every tag starts with #
-    def _normalise(tag: str) -> str:
-        tag = tag.strip()
-        return tag if tag.startswith("#") else f"#{tag}"
+    # Normalise: ensure every tag starts with # and contains no spaces
+    import re
+    _VALID = re.compile(r"^#[A-Za-z][A-Za-z0-9_]{1,}$")
 
-    normalised_llm  = [_normalise(t) for t in llm_hashtags if t.strip()]
-    normalised_base = [_normalise(t) for t in base]
+    def _normalise(tag: str) -> str | None:
+        tag = tag.strip()
+        # Strip leading # to normalise, then re-add
+        raw = tag.lstrip("#").strip()
+        if not raw or " " in raw:
+            return None          # reject multi-word tags
+        candidate = f"#{raw}"
+        return candidate if _VALID.match(candidate) else None
+
+    normalised_llm  = [t for t in (_normalise(x) for x in llm_hashtags) if t]
+    normalised_base = [t for t in (_normalise(x) for x in base) if t]
 
     # Mandatory platform tags (always included, deduped alongside the rest)
-    mandatory = [_normalise(t) for t in PLATFORM_MANDATORY.get(platform or "", [])]
+    mandatory = [t for t in (_normalise(x) for x in PLATFORM_MANDATORY.get(platform or "", [])) if t]
 
-    normalised_trending = [_normalise(t) for t in trending]
+    normalised_trending = [t for t in (_normalise(x) for x in trending) if t]
 
     # Merge: LLM-specific → trending → curated base → mandatory
     seen: set[str] = set()
