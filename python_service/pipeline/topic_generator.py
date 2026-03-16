@@ -87,7 +87,7 @@ NICHE_CONFIGS: dict[str, dict[str, Any]] = {
         "rss_feeds": [],
         "language":                 "en_US",
         "style":                    "quote",
-        "duration_target_seconds":  15,
+        "duration_target_seconds":  20,
         "assets_profile":           "mindset",
         "priority":                 8,
         "extra_params": {
