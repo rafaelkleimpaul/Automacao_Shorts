@@ -531,10 +531,14 @@ def request_purge_approval(base_url: str) -> dict:
         f"📅 {now_str}  |  ⏱ Expira em 2h\n",
     ]
 
+    _MAX_PREVIEW = 8  # max files listed per section to stay within Telegram's 4096 char limit
+
     if to_delete:
         lines.append(f"✅ <b>Para DELETAR ({len(to_delete)} arquivo(s) — {size_str}):</b>")
-        for item in to_delete:
+        for item in to_delete[:_MAX_PREVIEW]:
             lines.append(f"  [{item['profile']}] {item['name']} ({item['size_mb']} MB, usado {item['used_count']}×)")
+        if len(to_delete) > _MAX_PREVIEW:
+            lines.append(f"  <i>... e mais {len(to_delete) - _MAX_PREVIEW} arquivo(s)</i>")
     else:
         lines.append("✅ Nenhum arquivo confirmado para deleção.")
 
@@ -542,8 +546,10 @@ def request_purge_approval(base_url: str) -> dict:
 
     if to_restore:
         lines.append(f"♻️ <b>Para RESTAURAR ao pool ativo ({len(to_restore)} arquivo(s)):</b>")
-        for item in to_restore:
+        for item in to_restore[:_MAX_PREVIEW]:
             lines.append(f"  [{item['profile']}] {item['name']} ({item['size_mb']} MB)")
+        if len(to_restore) > _MAX_PREVIEW:
+            lines.append(f"  <i>... e mais {len(to_restore) - _MAX_PREVIEW} arquivo(s)</i>")
     else:
         lines.append("♻️ Nenhum arquivo para restaurar.")
 
