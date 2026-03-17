@@ -27,8 +27,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 W, H, FPS = 1080, 1920, 30
-MUSIC_VOLUME = 0.08          # 8 % — barely audible under voice
+MUSIC_VOLUME = 0.08          # 8 % — fallback when volume measurement fails
 VOICE_VOLUME = 1.0
+MUSIC_TARGET_DB = -28.0      # target mean dBFS for music in the final mix
 VIDEO_EXTS   = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 IMAGE_EXTS   = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -59,6 +60,44 @@ def _ffprobe_duration(path: Path) -> float:
         return float(out.strip())
     except Exception:
         return 0.0
+
+
+def _measure_mean_volume(path: Path) -> float:
+    """
+    Return the mean_volume (dBFS) of an audio/video file using ffmpeg volumedetect.
+    Falls back to -20.0 dBFS if the measurement fails.
+    """
+    cmd = [
+        "ffmpeg", "-i", str(path),
+        "-af", "volumedetect",
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        for line in result.stderr.splitlines():
+            if "mean_volume" in line:
+                m = re.search(r"mean_volume:\s*([-\d.]+)\s*dB", line)
+                if m:
+                    return float(m.group(1))
+    except Exception as exc:
+        logger.warning("Volume measurement failed for %s: %s", path.name, exc)
+    return -20.0  # safe default
+
+
+def _calc_music_gain(music_path: Path) -> float:
+    """
+    Calculate the linear gain multiplier to bring music to MUSIC_TARGET_DB,
+    clamped so it never exceeds MUSIC_VOLUME (safety ceiling).
+    """
+    mean_db = _measure_mean_volume(music_path)
+    gain = 10 ** ((MUSIC_TARGET_DB - mean_db) / 20)
+    clamped = min(gain, MUSIC_VOLUME)
+    logger.info(
+        "Music volume: %.1f dBFS → target %.1f dBFS → gain %.4f%s",
+        mean_db, MUSIC_TARGET_DB, gain,
+        f" (clamped to {MUSIC_VOLUME})" if clamped != gain else "",
+    )
+    return clamped
 
 
 def _build_background_from_videos(
@@ -189,9 +228,10 @@ def _build_audio_mix(
 ) -> Path:
     """Mix voice + optional background music into a single AAC track."""
     if music_path and music_path.exists():
+        music_gain = _calc_music_gain(music_path)
         filter_complex = (
             f"[0:a]volume={VOICE_VOLUME}[voice];"
-            f"[1:a]volume={MUSIC_VOLUME},aloop=loop=-1:size=2e+09[music];"
+            f"[1:a]volume={music_gain},aloop=loop=-1:size=2e+09[music];"
             f"[voice][music]amix=inputs=2:duration=first:dropout_transition=3[out]"
         )
         cmd = [
