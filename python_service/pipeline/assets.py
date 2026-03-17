@@ -253,18 +253,11 @@ def select_music(keywords: list[str] | None = None, music_profile: str | None = 
         )
         return None
 
-    if keywords:
-        scored = [(p, _score_asset(p, keywords)) for p in candidates]
-        top_score = max(s for _, s in scored)
-        if top_score == 0:
-            # No keyword match — pure random to avoid always picking the same file
-            chosen = random.choice(candidates)
-        else:
-            # Pick randomly among all files that share the top score
-            top_candidates = [p for p, s in scored if s == top_score]
-            chosen = random.choice(top_candidates)
-    else:
-        chosen = random.choice(candidates)
+    # Always pick randomly — the music_profile already narrows to the right mood/genre.
+    # Keyword scoring on file paths causes the same file to win every time
+    # (e.g. a file named "discipline.mp3" will always beat others when "discipline"
+    # appears in the script keywords).
+    chosen = random.choice(candidates)
 
     logger.info("Selected music: %s", chosen)
     return chosen
