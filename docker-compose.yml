@@ -164,6 +164,7 @@ services:
       - "host.docker.internal:host-gateway"     # reach host services (Ollama etc.)
     networks:
       - shorts_net
+      - shared_net   # also on NPM's network so nginx can resolve 'shorts_worker'
 
   # ─────────────────────────────────────────────
   # Nginx Reloader
@@ -186,6 +187,8 @@ services:
 networks:
   shorts_net:
     driver: bridge
+  shared_net:
+    external: true   # created by nginx_proxy_manager's compose stack
 
 volumes:
   # Declared here for clarity; actual dirs are bind mounts above.
