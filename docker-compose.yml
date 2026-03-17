@@ -179,7 +179,7 @@ services:
     command:
       - sh
       - -c
-      - "docker events --filter container=shorts_worker --filter event=start | while read e; do echo 'Worker started - reloading nginx'; docker exec nginx_proxy_manager nginx -s reload; done"
+      - "docker events --filter container=shorts_worker --filter event=start | while read e; do echo 'Worker started - waiting 5s for Docker DNS then reloading nginx'; sleep 5; docker exec nginx_proxy_manager nginx -s reload && echo 'nginx reloaded OK' || echo 'nginx reload failed'; done"
     depends_on:
       - video_worker
 
