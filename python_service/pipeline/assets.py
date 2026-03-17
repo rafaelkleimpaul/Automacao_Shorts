@@ -255,8 +255,14 @@ def select_music(keywords: list[str] | None = None, music_profile: str | None = 
 
     if keywords:
         scored = [(p, _score_asset(p, keywords)) for p in candidates]
-        scored.sort(key=lambda x: (-x[1], random.random()))
-        chosen = scored[0][0]
+        top_score = max(s for _, s in scored)
+        if top_score == 0:
+            # No keyword match — pure random to avoid always picking the same file
+            chosen = random.choice(candidates)
+        else:
+            # Pick randomly among all files that share the top score
+            top_candidates = [p for p, s in scored if s == top_score]
+            chosen = random.choice(top_candidates)
     else:
         chosen = random.choice(candidates)
 
