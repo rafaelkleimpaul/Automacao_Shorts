@@ -119,6 +119,7 @@ services:
 
       # LLM model name (e.g., llama3, mistral, phi3)
       LLM_MODEL: ${LLM_MODEL:-llama3}
+      LLM_API_KEY: ${LLM_API_KEY:-}
 
       # TTS voice selection
       TTS_VOICE: ${TTS_VOICE:-af_heart}
